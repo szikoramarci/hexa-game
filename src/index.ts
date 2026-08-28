@@ -10,3 +10,4 @@ export {
   cubeSubtract,
   isCube,
 } from "./coordinates.js";
+export { reachableCubes } from "./movement.js";
