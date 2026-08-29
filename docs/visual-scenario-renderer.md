@@ -41,6 +41,8 @@ export interface Scenario {
   goal?: Iterable<Cube>;
   reachable?: Iterable<Cube>;
   path?: Iterable<Cube>;       // ordered; also drawn as a connecting line
+  lines?: (readonly Cube[])[]; // thin black polylines through centres; no fill effect
+  arrows?: ArrowSpec[];        // styled arrows drawn on top (see docs/arrow.md)
 }
 ```
 

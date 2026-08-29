@@ -68,7 +68,8 @@ axis).
 ## Visual — `line-coverage.visual.test.ts`
 
 Write `linecoverage-<case>.svg` via `writeScenario`, `player: [start]`,
-`goal: [end]`, `reachable: lineCoverageCubes(start, end)`:
+`goal: [end]`, `reachable: lineCoverageCubes(start, end)`, plus
+`lines: [[start, end]]` for a thin black guide along the raw segment:
 
 - `adjacent` — the two-hex minimum.
 - `axis` — collinear centres, a clean straight run.

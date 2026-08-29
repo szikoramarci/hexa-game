@@ -18,6 +18,8 @@ describe("line-coverage · supercover line", () => {
       player: [start],
       goal: [end],
       reachable: lineCoverageCubes(start, end),
+      // The raw centre-to-centre segment the supercover is derived from.
+      lines: [[start, end]],
     };
     writeScenario(pkg(name), s);
   };

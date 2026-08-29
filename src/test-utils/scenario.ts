@@ -34,6 +34,12 @@ export interface Scenario {
   reachable?: Iterable<Cube>;
   /** Ordered; also drawn as a connecting polyline through the hex centres. */
   path?: Iterable<Cube>;
+  /**
+   * Thin black polylines through the given hex centres — a plain geometric
+   * guide (e.g. the raw segment a coverage function is derived from). Drawn
+   * under the arrows; never affects hex fills.
+   */
+  lines?: readonly (readonly Cube[])[];
   /** Styled arrows drawn on top of the board via {@link hexArrow}. */
   arrows?: readonly ArrowSpec[];
 }

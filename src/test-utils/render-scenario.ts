@@ -134,6 +134,21 @@ export function renderScenario(s: Scenario, opts?: RenderOptions): string {
     );
   }
 
+  for (const guide of s.lines ?? []) {
+    const pts = [...guide];
+    if (pts.length < 2) continue;
+    const line = pts
+      .map((h) => {
+        const p = toPixel(h, size);
+        return `${f(p.x)},${f(p.y)}`;
+      })
+      .join(" ");
+    overlays.push(
+      `  <polyline points="${line}" fill="none" stroke="#000" ` +
+        `stroke-width="1" pointer-events="none" />`,
+    );
+  }
+
   for (const spec of s.arrows ?? []) {
     const { hexes, ...style } = spec;
     overlays.push("  " + hexArrow([...hexes], { size, ...style }));
