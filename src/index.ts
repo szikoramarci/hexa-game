@@ -11,3 +11,4 @@ export {
   isCube,
 } from "./coordinates.js";
 export { reachableCubes } from "./movement.js";
+export { pixelRangeCubes } from "./pixel-range.js";
