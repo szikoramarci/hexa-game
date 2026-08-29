@@ -36,6 +36,7 @@ src/
   movement/       reachableCubes — BFS flood fill within a step budget
   pixel-range/    pixelRangeCubes — hexes whose centre falls in a pixel circle
   line-coverage/  lineCoverageCubes — every hex a centre-to-centre segment crosses
+  arrow/          hexArrow — styled SVG arrow through a list of hex centres
   test-utils/     shared visual-scenario renderer (scenario, render, write)
   index.ts        public exports
 ```
@@ -49,6 +50,14 @@ line.
 pixel centres rather than hex steps, so the region is a rounded hexagon that
 bulges past the hex-distance disc as `range` grows. `range` is in adjacent-hex
 spacings: `1` reaches the six neighbours.
+
+`hexArrow(hexes, style?)` returns an SVG `<g>` fragment for a rendered board
+(same pointy-top pixel map). `shape` sets the meaning: `straight` and 3+-hex
+`curved` are **routes** running through every hex centre; a 2-hex `curved` arrow
+is a **jump** — an arc leaving the board and landing again, over a faint ground
+chord with a vertical apex tick (`bow` = hop height). `weight` (`thin` /
+`normal` / `thick`), `dash` (`solid` / `dashed`), `color` and `size` are
+orthogonal. Scenarios carry arrows via the `arrows` field.
 
 ## Visual scenarios
 
@@ -78,6 +87,7 @@ groups by package, so every utility's cases show up together after one
 - `range` / `ring` / `spiral` — hexes within N steps
 - ~~`pixel-range`~~ — hexes whose centre falls in a pixel circle *(done)*
 - ~~`line-coverage`~~ — every hex a centre-to-centre segment crosses (supercover) *(done)*
+- ~~`arrow`~~ — styled SVG arrow: route through hex centres, or a 2-hex jump arc *(done)*
 - `line` — single-width hexes on a straight line (lerp + cube rounding)
 - `rotate` / `reflect` — symmetry operations
 - `pathfind` — A* over a passability predicate

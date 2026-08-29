@@ -1,4 +1,5 @@
 import { cubeKey, type Cube } from "../coordinates/coordinates.js";
+import { hexArrow } from "../arrow/arrow.js";
 import type { HexStatus, Scenario } from "./scenario.js";
 
 export interface RenderOptions {
@@ -131,6 +132,11 @@ export function renderScenario(s: Scenario, opts?: RenderOptions): string {
       `  <polyline points="${line}" fill="none" stroke="#ff8c00" ` +
         `stroke-width="3" pointer-events="none" />`,
     );
+  }
+
+  for (const spec of s.arrows ?? []) {
+    const { hexes, ...style } = spec;
+    overlays.push("  " + hexArrow([...hexes], { size, ...style }));
   }
 
   const titleEl = s.title

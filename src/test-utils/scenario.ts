@@ -1,4 +1,11 @@
 import type { Cube } from "../coordinates/coordinates.js";
+import type { ArrowStyle } from "../arrow/arrow.js";
+
+/** An arrow overlay: a hex path plus the {@link ArrowStyle} to draw it with. */
+export interface ArrowSpec extends ArrowStyle {
+  /** Ordered; 2+ hexes. The head points at the last one. */
+  hexes: Iterable<Cube>;
+}
 
 /**
  * The visual state of a single hex. When a hex qualifies for several of these at
@@ -27,4 +34,6 @@ export interface Scenario {
   reachable?: Iterable<Cube>;
   /** Ordered; also drawn as a connecting polyline through the hex centres. */
   path?: Iterable<Cube>;
+  /** Styled arrows drawn on top of the board via {@link hexArrow}. */
+  arrows?: readonly ArrowSpec[];
 }
