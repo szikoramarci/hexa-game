@@ -40,7 +40,8 @@ src/
   line-coverage/  lineCoverageCubes — every hex a centre-to-centre segment crosses
   pathfind/       pathCubes — shortest obstacle-free hex path (A*)
   arrow/          hexArrow — styled SVG arrow through a list of hex centres
-  test-utils/     shared scenario renderer + interactive movement playground
+  move-piece/     movePiece — constant-speed hex→hex animation plan (slide / jump)
+  test-utils/     shared scenario renderer + interactive playgrounds
   index.ts        public exports
 ```
 
@@ -64,6 +65,16 @@ cost, cube-distance heuristic) and returns the shortest path from `start` to
 `end` — both endpoints included — that never enters an obstacle, or `null` when
 an endpoint is walled off. Obstacles on `start` / `end` are ignored. Output is
 deterministic for equal-length ties.
+
+`movePiece(start, end, options?)` returns an animation *plan* — not an
+animation — for carrying a piece (any element centred on its local origin)
+between two hex centres. Duration is `hexes ** falloff / speed`: `speed`
+calibrates a 1-hex step and `falloff` (default `0.65`) makes longer moves
+accelerate so they still feel snappy (`falloff: 1` → strictly constant speed).
+`mode: "jump"` keeps the straight slide but scales up to `jumpPeak` at the apex
+and back to `1` on landing. `moveKeyframes(plan)` samples it into
+`element.animate(...)`-ready keyframes (CSS `transform`, so give an SVG element
+`transform-box: fill-box; transform-origin: center`). Pure and deterministic.
 
 `hexArrow(hexes, style?)` returns an SVG `<g>` fragment for a rendered board
 (same pointy-top pixel map). `shape` sets the meaning: `straight` and 3+-hex
@@ -89,14 +100,19 @@ Each utility gets a scenario package `src/<name>/<name>.visual.test.ts` calling
 `writeScenario("<name>", "<case>", scenario)`. Pages rebuild from disk each run,
 aggregating across the parallel vitest workers.
 
-The first **action** is the piece-movement playground
-(`actions/movement/index.html`) — every case on one page, each a clickable
-board: hover a reachable hex for the dashed move arrow, click to walk the piece
-there hex-by-hex, obstacles block. Authored in
-`src/movement/movement.playground.test.ts`; see `docs/movement-playground.md`.
+**Actions** are interactive single-page playgrounds:
+
+- `actions/movement/index.html` — hover a reachable hex for the dashed move
+  arrow, click to walk the piece there hex-by-hex, obstacles block. Authored in
+  `src/movement/movement.playground.test.ts`; see `docs/movement-playground.md`.
+- `actions/move-piece/index.html` — click a hex to send the pieces (player disc,
+  striped ball) there via `movePiece`; toggle ground / jump. Long moves stay
+  snappy (they accelerate); a jump zooms up over the gap. Authored in
+  `src/move-piece/move-piece.playground.test.ts`; see `docs/move-piece.md`.
 
 Shared test-only code is in `src/test-utils/` (`scenario.ts`, `board.ts`,
-`render-scenario.ts`, `write-scenario.ts`, `gallery.ts`, `movement-playground.ts`).
+`render-scenario.ts`, `write-scenario.ts`, `gallery.ts`, `movement-playground.ts`,
+`piece-playground.ts`).
 
 ## Adding a utility (per session)
 
@@ -115,6 +131,7 @@ Shared test-only code is in `src/test-utils/` (`scenario.ts`, `board.ts`,
 - ~~`pixel-range`~~ — hexes whose centre falls in a pixel circle *(done)*
 - ~~`line-coverage`~~ — every hex a centre-to-centre segment crosses (supercover) *(done)*
 - ~~`arrow`~~ — styled SVG arrow: route through hex centres, or a 2-hex jump arc *(done)*
+- ~~`move-piece`~~ — constant-speed hex→hex animation plan, ground slide or zooming jump *(done)*
 - `line` — single-width hexes on a straight line (lerp + cube rounding)
 - `rotate` / `reflect` — symmetry operations
 - ~~`pathfind`~~ — shortest obstacle-free hex path via A* *(done)*

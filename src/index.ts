@@ -26,6 +26,13 @@ export {
   pixelToCube,
 } from "./layout/layout.js";
 export { lineCoverageCubes } from "./line-coverage/line-coverage.js";
+export type {
+  MoveFrame,
+  MoveMode,
+  MoveOptions,
+  MovePlan,
+} from "./move-piece/move-piece.js";
+export { moveKeyframes, movePiece } from "./move-piece/move-piece.js";
 export { reachableCubes } from "./movement/movement.js";
 export { pathCubes } from "./pathfind/pathfind.js";
 export { pixelRangeCubes } from "./pixel-range/pixel-range.js";
