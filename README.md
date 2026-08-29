@@ -36,6 +36,7 @@ src/
   movement/       reachableCubes — BFS flood fill within a step budget
   pixel-range/    pixelRangeCubes — hexes whose centre falls in a pixel circle
   line-coverage/  lineCoverageCubes — every hex a centre-to-centre segment crosses
+  pathfind/       pathCubes — shortest obstacle-free hex path (A*)
   arrow/          hexArrow — styled SVG arrow through a list of hex centres
   test-utils/     shared visual-scenario renderer (scenario, render, write)
   index.ts        public exports
@@ -50,6 +51,12 @@ line.
 pixel centres rather than hex steps, so the region is a rounded hexagon that
 bulges past the hex-distance disc as `range` grows. `range` is in adjacent-hex
 spacings: `1` reaches the six neighbours.
+
+`pathCubes(start, end, obstacles?)` runs A* on the 6-neighbour grid (unit step
+cost, cube-distance heuristic) and returns the shortest path from `start` to
+`end` — both endpoints included — that never enters an obstacle, or `null` when
+an endpoint is walled off. Obstacles on `start` / `end` are ignored. Output is
+deterministic for equal-length ties.
 
 `hexArrow(hexes, style?)` returns an SVG `<g>` fragment for a rendered board
 (same pointy-top pixel map). `shape` sets the meaning: `straight` and 3+-hex
@@ -90,5 +97,5 @@ groups by package, so every utility's cases show up together after one
 - ~~`arrow`~~ — styled SVG arrow: route through hex centres, or a 2-hex jump arc *(done)*
 - `line` — single-width hexes on a straight line (lerp + cube rounding)
 - `rotate` / `reflect` — symmetry operations
-- `pathfind` — A* over a passability predicate
+- ~~`pathfind`~~ — shortest obstacle-free hex path via A* *(done)*
 - `layout` — cube ↔ pixel for a lightweight visual check

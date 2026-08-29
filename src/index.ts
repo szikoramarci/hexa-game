@@ -19,4 +19,5 @@ export type {
 export { hexArrow } from "./arrow/arrow.js";
 export { lineCoverageCubes } from "./line-coverage/line-coverage.js";
 export { reachableCubes } from "./movement/movement.js";
+export { pathCubes } from "./pathfind/pathfind.js";
 export { pixelRangeCubes } from "./pixel-range/pixel-range.js";
