@@ -17,10 +17,10 @@ pixel math to a public `src/layout.ts`.
 ## Files
 
 ```
-src/test-utils/scenario.ts        Scenario model + HexStatus  (shared, do first)
-src/test-utils/render-scenario.ts  renderScenario()
-src/test-utils/write-scenario.ts   writeScenario() + auto index.html
-src/visual.test.ts                 4-6 hand-authored scenarios
+src/test-utils/scenario.ts          Scenario model + HexStatus  (shared, do first)
+src/test-utils/render-scenario.ts   renderScenario()
+src/test-utils/write-scenario.ts    writeScenario() + auto index.html
+src/<name>/<name>.visual.test.ts    per-utility hand-authored scenarios
 ```
 
 Test-only code — not re-exported from `src/index.ts`. `scenarios/` is gitignored.

@@ -1,4 +1,4 @@
-import type { Cube } from "../coordinates.js";
+import type { Cube } from "../coordinates/coordinates.js";
 
 /**
  * The visual state of a single hex. When a hex qualifies for several of these at

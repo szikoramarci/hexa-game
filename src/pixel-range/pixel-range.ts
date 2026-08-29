@@ -1,4 +1,4 @@
-import { cubeKey, type Cube } from "./coordinates.js";
+import { cubeKey, type Cube } from "../coordinates/coordinates.js";
 
 /** Pointy-top pixel centre at unit size. Cube -> axial is `q = x`, `r = z`. */
 function toPixel(c: Cube): { px: number; py: number } {

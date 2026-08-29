@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { cube } from "./coordinates.js";
+import { cube } from "../coordinates/coordinates.js";
 import { reachableCubes } from "./movement.js";
-import type { Cube } from "./coordinates.js";
-import type { Scenario } from "./test-utils/scenario.js";
-import { writeScenario } from "./test-utils/write-scenario.js";
+import type { Cube } from "../coordinates/coordinates.js";
+import type { Scenario } from "../test-utils/scenario.js";
+import { writeScenario } from "../test-utils/write-scenario.js";
 
 const origin = cube(0, 0, 0);
 

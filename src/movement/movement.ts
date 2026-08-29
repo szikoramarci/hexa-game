@@ -1,4 +1,4 @@
-import { CUBE_DIRECTIONS, cubeAdd, cubeKey, type Cube } from "./coordinates.js";
+import { CUBE_DIRECTIONS, cubeAdd, cubeKey, type Cube } from "../coordinates/coordinates.js";
 
 /**
  * All hexes a piece standing on `origin` can reach in at most `steps` moves,

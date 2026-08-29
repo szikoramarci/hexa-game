@@ -1,4 +1,4 @@
-import { cubeKey, type Cube } from "../coordinates.js";
+import { cubeKey, type Cube } from "../coordinates/coordinates.js";
 import type { HexStatus, Scenario } from "./scenario.js";
 
 export interface RenderOptions {

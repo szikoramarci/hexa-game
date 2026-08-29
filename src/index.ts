@@ -1,4 +1,4 @@
-export type { Cube } from "./coordinates.js";
+export type { Cube } from "./coordinates/coordinates.js";
 export {
   CUBE_DIRECTIONS,
   CUBE_EPSILON,
@@ -9,7 +9,7 @@ export {
   cubeScale,
   cubeSubtract,
   isCube,
-} from "./coordinates.js";
-export { lineCoverageCubes } from "./line-coverage.js";
-export { reachableCubes } from "./movement.js";
-export { pixelRangeCubes } from "./pixel-range.js";
+} from "./coordinates/coordinates.js";
+export { lineCoverageCubes } from "./line-coverage/line-coverage.js";
+export { reachableCubes } from "./movement/movement.js";
+export { pixelRangeCubes } from "./pixel-range/pixel-range.js";

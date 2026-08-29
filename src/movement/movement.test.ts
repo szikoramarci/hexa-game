@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cube, cubeKey } from "./coordinates.js";
+import { cube, cubeKey } from "../coordinates/coordinates.js";
 import { reachableCubes } from "./movement.js";
 
 const keys = (cs: ReturnType<typeof reachableCubes>) => new Set(cs.map(cubeKey));

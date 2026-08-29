@@ -1,4 +1,4 @@
-import { cubeEquals, cubeKey, type Cube } from "./coordinates.js";
+import { cubeEquals, cubeKey, type Cube } from "../coordinates/coordinates.js";
 
 /** Absolute slack so edge and corner grazes are kept as "covered". */
 const EPSILON = 1e-9;

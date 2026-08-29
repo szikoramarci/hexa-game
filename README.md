@@ -28,13 +28,16 @@ centre is `(0, 0, 0)`. Reference: [Red Blob Games — Hexagons](https://www.redb
 
 ## Layout
 
+One folder per utility, holding its impl, unit test, and visual test:
+
 ```
 src/
-  coordinates.ts        Cube type, constructor, validation, vector math, directions
-  movement.ts           reachableCubes — BFS flood fill within a step budget
-  pixel-range.ts        pixelRangeCubes — hexes whose centre falls in a pixel circle
-  line-coverage.ts      lineCoverageCubes — every hex a centre-to-centre segment crosses
-  index.ts              public exports
+  coordinates/    Cube type, constructor, validation, vector math, directions
+  movement/       reachableCubes — BFS flood fill within a step budget
+  pixel-range/    pixelRangeCubes — hexes whose centre falls in a pixel circle
+  line-coverage/  lineCoverageCubes — every hex a centre-to-centre segment crosses
+  test-utils/     shared visual-scenario renderer (scenario, render, write)
+  index.ts        public exports
 ```
 
 `lineCoverageCubes(start, end)` is the *supercover* line: every hex whose closed
@@ -53,17 +56,18 @@ spacings: `1` reaches the six neighbours.
 `scenarios/*.svg` plus a `scenarios/index.html` gallery — open it in a browser or
 VS Code preview to eyeball them. Test-only; the directory is gitignored.
 
-Each utility gets its own scenario package: `src/<name>.visual.test.ts`, writing
-`<name>-<case>.svg`. The gallery scans the whole `scenarios/` folder and groups
-by package, so every utility's cases show up together after one `npm test`.
-Shared code lives in `src/test-utils/` (`scenario.ts`, `render-scenario.ts`,
-`write-scenario.ts`).
+Each utility gets its own scenario package: `src/<name>/<name>.visual.test.ts`,
+writing `<name>-<case>.svg`. The gallery scans the whole `scenarios/` folder and
+groups by package, so every utility's cases show up together after one
+`npm test`. Shared code lives in `src/test-utils/` (`scenario.ts`,
+`render-scenario.ts`, `write-scenario.ts`).
 
 ## Adding a utility (per session)
 
-1. One concern per file: `src/<name>.ts` + `src/<name>.test.ts`.
+1. One concern per folder: `src/<name>/<name>.ts` + `src/<name>/<name>.test.ts`
+   (+ optional `<name>.visual.test.ts`).
 2. Pure functions. Take `Cube`, return new values — never mutate inputs.
-3. Build on `coordinates.ts` primitives; don't re-derive them.
+3. Build on `coordinates/` primitives; don't re-derive them.
 4. Re-export from `src/index.ts`.
 5. `npm run typecheck && npm test` must pass.
 

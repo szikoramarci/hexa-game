@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cube, cubeKey, type Cube } from "./coordinates.js";
+import { cube, cubeKey, type Cube } from "../coordinates/coordinates.js";
 import { lineCoverageCubes } from "./line-coverage.js";
 
 const keys = (cs: Cube[]) => new Set(cs.map(cubeKey));

@@ -1,8 +1,8 @@
 import { describe, it } from "vitest";
-import { cube, type Cube } from "./coordinates.js";
+import { cube, type Cube } from "../coordinates/coordinates.js";
 import { lineCoverageCubes } from "./line-coverage.js";
-import type { Scenario } from "./test-utils/scenario.js";
-import { writeScenario } from "./test-utils/write-scenario.js";
+import type { Scenario } from "../test-utils/scenario.js";
+import { writeScenario } from "../test-utils/write-scenario.js";
 
 /** Prefix every scenario file so packages share the flat `scenarios/` dir. */
 const pkg = (name: string) => `linecoverage-${name}`;
