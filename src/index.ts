@@ -10,5 +10,6 @@ export {
   cubeSubtract,
   isCube,
 } from "./coordinates.js";
+export { lineCoverageCubes } from "./line-coverage.js";
 export { reachableCubes } from "./movement.js";
 export { pixelRangeCubes } from "./pixel-range.js";

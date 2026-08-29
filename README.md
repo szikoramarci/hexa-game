@@ -33,8 +33,14 @@ src/
   coordinates.ts        Cube type, constructor, validation, vector math, directions
   movement.ts           reachableCubes — BFS flood fill within a step budget
   pixel-range.ts        pixelRangeCubes — hexes whose centre falls in a pixel circle
+  line-coverage.ts      lineCoverageCubes — every hex a centre-to-centre segment crosses
   index.ts              public exports
 ```
+
+`lineCoverageCubes(start, end)` is the *supercover* line: every hex whose closed
+hexagon the segment between the two centres touches. Crossing a shared edge
+returns both hexes; running along one returns both. Wider than a lerp-and-round
+line.
 
 `pixelRangeCubes(center, range)` selects hexes by Euclidean distance between
 pixel centres rather than hex steps, so the region is a rounded hexagon that
@@ -67,7 +73,8 @@ Shared code lives in `src/test-utils/` (`scenario.ts`, `render-scenario.ts`,
 - `neighbors` — adjacent hexes (via `CUBE_DIRECTIONS`)
 - `range` / `ring` / `spiral` — hexes within N steps
 - ~~`pixel-range`~~ — hexes whose centre falls in a pixel circle *(done)*
-- `line` — hexes on a straight line (with cube rounding)
+- ~~`line-coverage`~~ — every hex a centre-to-centre segment crosses (supercover) *(done)*
+- `line` — single-width hexes on a straight line (lerp + cube rounding)
 - `rotate` / `reflect` — symmetry operations
 - `pathfind` — A* over a passability predicate
 - `layout` — cube ↔ pixel for a lightweight visual check
