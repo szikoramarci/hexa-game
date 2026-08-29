@@ -1,6 +1,6 @@
 import { cubeKey, type Cube } from "../coordinates/coordinates.js";
 import { cubeToPixel, DEFAULT_HEX_SIZE } from "../layout/layout.js";
-import { disc, hexCorners } from "./board.js";
+import { disc, hexCorners, playerMarker } from "./board.js";
 import { actionPage, registerActionGroup } from "./gallery.js";
 import type { RenderOptions } from "./render-scenario.js";
 
@@ -11,22 +11,33 @@ const COLOR = {
   reachableHover: "#93c2ff",
   obstacle: "#4a4a4a",
   grid: "#999",
-  piece: "#d33",
   arrow: "#ff8c00",
 } as const;
 
+/** Piece fill, by index. */
+const PIECE_COLORS = ["#d33", "#2478c9", "#2a9d5c", "#a3599f"] as const;
+
 const STEP_MS = 140;
 
-/** A movable piece and how far it may travel, on one board. */
+/** A piece the movement action can pick up and walk. */
+export interface PlaygroundPiece {
+  at: Cube;
+  /** Drawn on the disc. */
+  label: string | number;
+  /** Hexes it may travel — its `movePoints`. */
+  movePoints: number;
+}
+
+/** One board on the movement page. */
 export interface MovementPlayground {
   /** Draw the full hex disc of this radius, centred on the origin. */
   radius: number;
-  /** The piece: where it starts and the number drawn on it. */
-  piece: { at: Cube; label: string | number };
-  /** Step budget — how many hexes it can move in one action. */
-  budget: number;
-  /** Hexes the piece may neither enter nor cross. */
+  /** One or more pieces; click one to select it. */
+  pieces: readonly PlaygroundPiece[];
+  /** Hexes no piece may enter or cross. */
   obstacle?: Iterable<Cube>;
+  /** Do pieces block each other? Default `true`. */
+  piecesBlock?: boolean;
 }
 
 /** One titled case on the movement page. */
@@ -47,11 +58,10 @@ function escapeHtml(text: string): string {
 
 interface CaseData {
   size: number;
-  budget: number;
-  origin: string;
-  label: string;
   board: string[];
   obstacles: string[];
+  piecesBlock: boolean;
+  pieces: { id: string; at: string; label: string; movePoints: number }[];
 }
 
 /** The `<section>` markup for one case, plus the data blob its script needs. */
@@ -94,15 +104,37 @@ function renderCase(
     })
     .join("\n");
 
-  const start = cubeToPixel(p.piece.at, size);
-  const label = String(p.piece.label);
+  const pieces = p.pieces.map((piece, i) => ({
+    id: `${id}-p${i}`,
+    at: cubeKey(piece.at),
+    label: String(piece.label),
+    movePoints: piece.movePoints,
+    color: PIECE_COLORS[i % PIECE_COLORS.length]!,
+  }));
+
+  const pieceEls = pieces
+    .map((piece, i) => {
+      const px = cubeToPixel(p.pieces[i]!.at, size);
+      return (
+        `        <g class="piece" data-id="${piece.id}" data-home="${piece.at}" ` +
+        `transform="translate(${f(px.x)} ${f(px.y)})">` +
+        playerMarker(size, piece.color, piece.label) +
+        `</g>`
+      );
+    })
+    .join("\n");
+
   const data: CaseData = {
     size,
-    budget: p.budget,
-    origin: cubeKey(p.piece.at),
-    label,
     board: hexes.map((h) => cubeKey(h)),
     obstacles: [...obstacleKeys],
+    piecesBlock: p.piecesBlock !== false,
+    pieces: pieces.map(({ id, at, label, movePoints }) => ({
+      id,
+      at,
+      label,
+      movePoints,
+    })),
   };
 
   const section =
@@ -111,14 +143,8 @@ function renderCase(
     `      <svg class="board" viewBox="${vb}" xmlns="http://www.w3.org/2000/svg">\n` +
     polygons +
     `\n        <g class="arrow-layer"></g>\n` +
-    `        <g class="piece" transform="translate(${f(start.x)} ${f(start.y)})">\n` +
-    `          <circle r="${f(size * 0.62)}" fill="${COLOR.piece}" ` +
-    `stroke="#fff" stroke-width="${f(size * 0.09)}" />\n` +
-    `          <text text-anchor="middle" dominant-baseline="central" fill="#fff" ` +
-    `font-size="${f(size * 0.8)}" font-family="sans-serif" font-weight="700">` +
-    `${escapeHtml(label)}</text>\n` +
-    `        </g>\n` +
-    `      </svg>\n` +
+    pieceEls +
+    `\n      </svg>\n` +
     `      <div class="hud"><span class="status"></span>` +
     `<button class="reset" type="button">reset</button></div>\n` +
     `    </section>`;
@@ -138,68 +164,123 @@ const CASES_CSS = `
   .hex.reach { fill: ${COLOR.reachable}; cursor: pointer; }
   .hex.reach:hover { fill: ${COLOR.reachableHover}; }
   .arrow-layer { pointer-events: none; }
-  .piece { pointer-events: none; transition: transform ${STEP_MS}ms linear; }
+  .piece { cursor: pointer; transition: transform ${STEP_MS}ms linear; }
+  .piece.selected { filter: drop-shadow(0 0 3px #1560c4); }
+  .piece.dim { opacity: .5; }
   .hud { display: flex; align-items: center; justify-content: space-between;
     gap: .75rem; margin-top: .5rem; font-size: .8rem; color: #666; }
   .reset { font: inherit; padding: .1rem .55rem; cursor: pointer; }`;
 
 /**
- * The live layer, once per page. `initCase(section, DATA)` wires one board:
- * a mirror of `cubeToPixel` + a BFS flood from the piece that doubles as
- * `reachableCubes` and an all-targets shortest-path tree (unit step cost, so
- * BFS parents *are* the shortest path). Hover a reachable hex for the dashed
- * move arrow; click to walk there; moving re-floods from the new hex; reset
- * restores the start. No backticks / `${` so it embeds verbatim.
+ * The live layer, once per page. `initCase(section, DATA)` is a faithful mirror
+ * of `src/move-action/move-action.ts` — the same `MoveActionState`, the same
+ * `idle -> aiming -> moving -> spent` reducer over the same events — running on
+ * a small `cubeToPixel` + BFS-flood port (unit step cost, so BFS parents are the
+ * shortest path, matching `movePath`). Kept honest by the playground test's
+ * cross-check against the real module. No backticks / `${` so it embeds verbatim.
  */
 const SCRIPT = [
-  "var STEP_MS = " + STEP_MS + ";",
   "var DIRS = [[1,-1,0],[1,0,-1],[0,1,-1],[-1,1,0],[-1,0,1],[0,-1,1]];",
+  "var STEP_MS = " + STEP_MS + ";",
+  "var ARROW = '" + COLOR.arrow + "';",
   "function neighbours(key) {",
   "  var p = key.split(',').map(Number);",
   "  return DIRS.map(function (d) { return (p[0]+d[0])+','+(p[1]+d[1])+','+(p[2]+d[2]); });",
   "}",
+  "",
   "function initCase(section, DATA) {",
   "  var SIZE = DATA.size;",
   "  var board = new Set(DATA.board);",
-  "  var blocked = new Set(DATA.obstacles);",
+  "  var obstacles = new Set(DATA.obstacles);",
   "  var svg = section.querySelector('.board');",
   "  var arrowLayer = svg.querySelector('.arrow-layer');",
-  "  var pieceEl = svg.querySelector('.piece');",
   "  var statusEl = section.querySelector('.status');",
   "  var hexEls = new Map();",
   "  svg.querySelectorAll('.hex').forEach(function (el) { hexEls.set(el.dataset.key, el); });",
+  "  var pieceEls = new Map();",
+  "  svg.querySelectorAll('.piece').forEach(function (el) { pieceEls.set(el.dataset.id, el); });",
   "",
   "  function toPixel(key) {",
   "    var p = key.split(',').map(Number);",
   "    return { x: SIZE * Math.sqrt(3) * (p[0] + p[2] / 2), y: SIZE * 1.5 * p[2] };",
   "  }",
-  "  function flood(origin) {",
-  "    var dist = new Map([[origin, 0]]);",
-  "    var cameFrom = new Map();",
-  "    var frontier = [origin];",
-  "    for (var d = 0; d < DATA.budget && frontier.length; d++) {",
+  "",
+  "  // --- game state (mirrors MoveActionState) ---",
+  "  var pieces = DATA.pieces.map(function (p) {",
+  "    return { id: p.id, at: p.at, label: p.label, movePoints: p.movePoints,",
+  "             home: p.at, homeMP: p.movePoints };",
+  "  });",
+  "  function piece(id) { return pieces.filter(function (p) { return p.id === id; })[0]; }",
+  "",
+  "  function blockersFor(id) {",
+  "    var b = new Set(obstacles);",
+  "    if (DATA.piecesBlock) pieces.forEach(function (p) { if (p.id !== id) b.add(p.at); });",
+  "    return b;",
+  "  }",
+  "  function flood(id) {",
+  "    var me = piece(id), blocked = blockersFor(id);",
+  "    var dist = new Map([[me.at, 0]]), cameFrom = new Map(), frontier = [me.at];",
+  "    for (var d = 0; d < me.movePoints && frontier.length; d++) {",
   "      var next = [];",
   "      for (var i = 0; i < frontier.length; i++) {",
   "        var ns = neighbours(frontier[i]);",
   "        for (var j = 0; j < ns.length; j++) {",
   "          var nk = ns[j];",
   "          if (dist.has(nk) || blocked.has(nk) || !board.has(nk)) continue;",
-  "          dist.set(nk, d + 1);",
-  "          cameFrom.set(nk, frontier[i]);",
-  "          next.push(nk);",
+  "          dist.set(nk, d + 1); cameFrom.set(nk, frontier[i]); next.push(nk);",
   "        }",
   "      }",
   "      frontier = next;",
   "    }",
-  "    return { dist: dist, cameFrom: cameFrom };",
+  "    return { dist: dist, cameFrom: cameFrom, origin: me.at };",
   "  }",
-  "  function pathTo(cameFrom, target) {",
+  "  function pathTo(tree, target) {",
+  "    if (!tree || target === tree.origin || !tree.dist.has(target)) return null;",
   "    var path = [target], step = target;",
-  "    while (cameFrom.has(step)) { step = cameFrom.get(step); path.unshift(step); }",
+  "    while (tree.cameFrom.has(step)) { step = tree.cameFrom.get(step); path.unshift(step); }",
   "    return path;",
   "  }",
   "",
-  "  function svgEl(tag) { return document.createElementNS('http://www.w3.org/2000/svg', tag); }",
+  "  // --- snapshot (mirrors MoveActionSnapshot) ---",
+  "  var snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0 };",
+  "  var tree = null;",
+  "  function aimingPhase(p) { return p.movePoints > 0 ? 'aiming' : 'spent'; }",
+  "",
+  "  function dispatch(ev) {",
+  "    if (ev.type === 'selectPiece') {",
+  "      if (snap.phase === 'moving') return;",
+  "      var p = piece(ev.pieceId); if (!p) return;",
+  "      snap = { phase: aimingPhase(p), activeId: p.id, target: null, path: [], stepIndex: 0 };",
+  "      tree = flood(p.id);",
+  "    } else if (ev.type === 'hoverHex') {",
+  "      if (snap.phase !== 'aiming') return;",
+  "      if (!ev.hex) { snap.target = null; snap.path = []; return; }",
+  "      var pth = pathTo(tree, ev.hex);",
+  "      if (pth) { snap.target = ev.hex; snap.path = pth; } else { snap.target = null; snap.path = []; }",
+  "    } else if (ev.type === 'commit') {",
+  "      if (snap.phase !== 'aiming') return;",
+  "      var hex = ev.hex || snap.target; if (!hex) return;",
+  "      var route = pathTo(tree, hex);",
+  "      if (!route || route.length < 2) return;",
+  "      snap.phase = 'moving'; snap.target = hex; snap.path = route; snap.stepIndex = 0;",
+  "    } else if (ev.type === 'advance') {",
+  "      if (snap.phase !== 'moving') return;",
+  "      snap.stepIndex++;",
+  "      if (snap.stepIndex < snap.path.length - 1) return;",
+  "      var ap = piece(snap.activeId);",
+  "      ap.at = snap.path[snap.path.length - 1];",
+  "      ap.movePoints -= (snap.path.length - 1);",
+  "      snap = { phase: aimingPhase(ap), activeId: ap.id, target: null, path: [], stepIndex: 0 };",
+  "      tree = flood(ap.id);",
+  "    } else if (ev.type === 'cancel') {",
+  "      if (snap.phase === 'moving') return;",
+  "      snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0 };",
+  "      tree = null;",
+  "    }",
+  "  }",
+  "",
+  "  // --- rendering (mirrors moveView) ---",
+  "  function svgEl(t) { return document.createElementNS('http://www.w3.org/2000/svg', t); }",
   "  function drawArrow(path) {",
   "    arrowLayer.replaceChildren();",
   "    if (path.length < 2) return;",
@@ -207,7 +288,7 @@ const SCRIPT = [
   "    var poly = svgEl('polyline');",
   "    poly.setAttribute('points', pts.map(function (q) { return q.x.toFixed(2)+','+q.y.toFixed(2); }).join(' '));",
   "    poly.setAttribute('fill', 'none');",
-  "    poly.setAttribute('stroke', '" + COLOR.arrow + "');",
+  "    poly.setAttribute('stroke', ARROW);",
   "    poly.setAttribute('stroke-width', (SIZE * 0.16).toFixed(2));",
   "    poly.setAttribute('stroke-linecap', 'round');",
   "    poly.setAttribute('stroke-linejoin', 'round');",
@@ -224,61 +305,74 @@ const SCRIPT = [
   "      (bx - uy*hw).toFixed(2)+','+(by + ux*hw).toFixed(2),",
   "      (bx + uy*hw).toFixed(2)+','+(by - ux*hw).toFixed(2)",
   "    ].join(' '));",
-  "    head.setAttribute('fill', '" + COLOR.arrow + "');",
+  "    head.setAttribute('fill', ARROW);",
   "    arrowLayer.appendChild(head);",
   "  }",
-  "",
-  "  var origin = DATA.origin;",
-  "  var tree = flood(origin);",
-  "  var moving = false;",
-  "",
-  "  function placePiece(key) {",
+  "  function placePiece(el, key) {",
   "    var q = toPixel(key);",
-  "    pieceEl.setAttribute('transform', 'translate(' + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ')');",
+  "    el.setAttribute('transform', 'translate(' + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ')');",
   "  }",
-  "  function paint() {",
-  "    var count = 0;",
-  "    hexEls.forEach(function (el, key) {",
-  "      var on = tree.dist.has(key) && key !== origin && !blocked.has(key);",
-  "      el.classList.toggle('reach', on);",
-  "      if (on) count++;",
-  "    });",
-  "    statusEl.textContent = 'budget ' + DATA.budget + '  \\u00b7  ' + count + ' hexes in reach';",
-  "  }",
-  "  function recompute() { tree = flood(origin); paint(); }",
   "",
-  "  function move(path) {",
-  "    moving = true;",
-  "    arrowLayer.replaceChildren();",
-  "    var i = 1;",
+  "  function render() {",
+  "    pieces.forEach(function (p) {",
+  "      var el = pieceEls.get(p.id);",
+  "      // while walking, the active piece sits on the hex it has reached so far",
+  "      // (snap.stepIndex), so each `advance` slides it one hex along the path.",
+  "      var moving = snap.phase === 'moving' && p.id === snap.activeId;",
+  "      placePiece(el, moving ? snap.path[snap.stepIndex] : p.at);",
+  "      el.classList.toggle('selected', p.id === snap.activeId);",
+  "      el.classList.toggle('dim', p.movePoints === 0 && p.id !== snap.activeId);",
+  "    });",
+  "    var reach = new Set();",
+  "    if (tree && (snap.phase === 'aiming' || snap.phase === 'spent')) {",
+  "      tree.dist.forEach(function (d, key) { if (key !== tree.origin) reach.add(key); });",
+  "    }",
+  "    hexEls.forEach(function (el, key) { el.classList.toggle('reach', reach.has(key)); });",
+  "    drawArrow(snap.path);",
+  "    if (snap.phase === 'idle') statusEl.textContent = 'select a piece';",
+  "    else if (snap.phase === 'moving') statusEl.textContent = 'moving\\u2026';",
+  "    else {",
+  "      var ap = piece(snap.activeId);",
+  "      statusEl.textContent = ap.label + ': ' + ap.movePoints + ' MP  \\u00b7  ' + reach.size + ' in reach';",
+  "    }",
+  "  }",
+  "",
+  "  // Walk the committed path hex by hex: one `advance` per tick, render()",
+  "  // slides the piece to the next hex (CSS transition on `.piece`).",
+  "  function runMove() {",
   "    (function stepOn() {",
-  "      if (i >= path.length) { moving = false; origin = path[path.length - 1]; recompute(); return; }",
-  "      placePiece(path[i]);",
-  "      i++;",
-  "      setTimeout(stepOn, STEP_MS);",
+  "      if (snap.phase !== 'moving') return;",
+  "      dispatch({ type: 'advance' });",
+  "      render();",
+  "      if (snap.phase === 'moving') setTimeout(stepOn, STEP_MS);",
   "    })();",
   "  }",
   "",
   "  hexEls.forEach(function (el, key) {",
-  "    el.addEventListener('pointerenter', function () {",
-  "      if (moving || key === origin || !tree.dist.has(key)) return;",
-  "      drawArrow(pathTo(tree.cameFrom, key));",
-  "    });",
-  "    el.addEventListener('pointerleave', function () { if (!moving) arrowLayer.replaceChildren(); });",
+  "    el.addEventListener('pointerenter', function () { dispatch({ type: 'hoverHex', hex: key }); render(); });",
+  "    el.addEventListener('pointerleave', function () { dispatch({ type: 'hoverHex', hex: null }); render(); });",
   "    el.addEventListener('click', function () {",
-  "      if (moving || key === origin || !tree.dist.has(key)) return;",
-  "      move(pathTo(tree.cameFrom, key));",
+  "      if (snap.phase !== 'aiming') return;",
+  "      dispatch({ type: 'commit', hex: key });",
+  "      if (snap.phase === 'moving') runMove(); else render();",
+  "    });",
+  "  });",
+  "  pieceEls.forEach(function (el, id) {",
+  "    el.addEventListener('click', function (e) {",
+  "      e.stopPropagation();",
+  "      dispatch({ type: 'selectPiece', pieceId: id });",
+  "      render();",
   "    });",
   "  });",
   "  section.querySelector('.reset').addEventListener('click', function () {",
-  "    if (moving) return;",
-  "    origin = DATA.origin;",
-  "    placePiece(origin);",
-  "    arrowLayer.replaceChildren();",
-  "    recompute();",
+  "    if (snap.phase === 'moving') return;",
+  "    pieces.forEach(function (p) { p.at = p.home; p.movePoints = p.homeMP; });",
+  "    snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0 };",
+  "    tree = null;",
+  "    render();",
   "  });",
   "",
-  "  paint();",
+  "  render();",
   "}",
   "CASES.forEach(function (c) { initCase(document.getElementById(c.id), c.data); });",
 ].join("\n");
@@ -307,10 +401,12 @@ export function writeMovementPlayground(
   const body =
     `  <a class="back" href="../../index.html">&larr; all scenarios</a>\n` +
     `  <h1>${escapeHtml(label)}</h1>\n` +
-    `  <p class="lede">${escapeHtml(blurb)} Reachable hexes are blue — hover ` +
-    `one for the dashed move arrow, click to walk the piece there step by step. ` +
-    `Obstacles (dark) block the flood and the path; after a move the region ` +
-    `recomputes from the new hex. <strong>reset</strong> restores the start.</p>\n` +
+    `  <p class="lede">${escapeHtml(blurb)} <strong>Click a piece</strong> to ` +
+    `pick it up — its reachable hexes turn blue. Hover one for the dashed move ` +
+    `arrow, click it to walk there hex by hex. Obstacles (dark) and other pieces ` +
+    `block; each move spends move points. Click another piece to switch, ` +
+    `<strong>reset</strong> to start over. Same <code>idle → aiming → ` +
+    `moving</code> reducer as <code>move-action</code>.</p>\n` +
     `  <div class="cases">\n` +
     rendered.map((r) => r.section).join("\n") +
     `\n  </div>\n` +

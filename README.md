@@ -41,9 +41,19 @@ src/
   pathfind/       pathCubes — shortest obstacle-free hex path (A*)
   arrow/          hexArrow — styled SVG arrow through a list of hex centres
   move-piece/     movePiece — constant-speed hex→hex animation plan (slide / jump)
+  move-action/    the movement action — reachable + aim + walk, as pure state
   test-utils/     shared scenario renderer + interactive playgrounds
   index.ts        public exports
 ```
+
+`move-action` is the first **action** — it composes the utilities into "pick a
+piece, see where it can go, aim, walk it there". Either call the pieces directly
+(`reachableForPiece`, `movePath`, `moveArrow`, `applyMove`) or feed the event
+reducer (`initMoveAction` / `moveAction(snap, event)` / `moveView`) UI events
+(`selectPiece`, `hoverHex`, `commit`, `advance`, `cancel`) and let it walk
+`idle → aiming → moving → spent`. `moveView().step` hands you one hex segment at
+a time, so the piece steps through every hex of the path, not start-to-end. Pure;
+no DOM, no timers, no rendering. See `docs/move-action.md`.
 
 `cubeToPixel(c, size?)` / `pixelToCube(px, py, size?)` are the one pointy-top
 layout map (`px = size·√3·(x + z/2)`, `py = size·1.5·z`, default `size` 26) —
@@ -102,9 +112,11 @@ aggregating across the parallel vitest workers.
 
 **Actions** are interactive single-page playgrounds:
 
-- `actions/movement/index.html` — hover a reachable hex for the dashed move
-  arrow, click to walk the piece there hex-by-hex, obstacles block. Authored in
-  `src/movement/movement.playground.test.ts`; see `docs/movement-playground.md`.
+- `actions/movement/index.html` — click a piece to select it, hover a reachable
+  hex for the dashed move arrow, click to walk the piece through every hex of the
+  path; obstacles and other pieces block. The inline script mirrors the
+  `move-action` reducer. Authored in `src/movement/movement.playground.test.ts`;
+  see `docs/move-action.md` and `docs/movement-playground.md`.
 - `actions/move-piece/index.html` — click a hex to send the pieces (player disc,
   striped ball) there via `movePiece`; toggle ground / jump. Long moves stay
   snappy (they accelerate); a jump zooms up over the gap. Authored in
@@ -132,6 +144,7 @@ Shared test-only code is in `src/test-utils/` (`scenario.ts`, `board.ts`,
 - ~~`line-coverage`~~ — every hex a centre-to-centre segment crosses (supercover) *(done)*
 - ~~`arrow`~~ — styled SVG arrow: route through hex centres, or a 2-hex jump arc *(done)*
 - ~~`move-piece`~~ — constant-speed hex→hex animation plan, ground slide or zooming jump *(done)*
+- ~~`move-action`~~ — the movement action: reachable + aim + walk, direct fns or event reducer *(done)*
 - `line` — single-width hexes on a straight line (lerp + cube rounding)
 - `rotate` / `reflect` — symmetry operations
 - ~~`pathfind`~~ — shortest obstacle-free hex path via A* *(done)*

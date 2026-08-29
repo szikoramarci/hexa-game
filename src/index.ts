@@ -27,6 +27,25 @@ export {
 } from "./layout/layout.js";
 export { lineCoverageCubes } from "./line-coverage/line-coverage.js";
 export type {
+  MoveActionEvent,
+  MoveActionSnapshot,
+  MoveActionState,
+  MoveActionView,
+  MoveArrow,
+  MovePhase,
+  Piece,
+} from "./move-action/move-action.js";
+export {
+  applyMove,
+  blockersFor,
+  initMoveAction,
+  moveAction,
+  moveArrow,
+  movePath,
+  moveView,
+  reachableForPiece,
+} from "./move-action/move-action.js";
+export type {
   MoveFrame,
   MoveMode,
   MoveOptions,
