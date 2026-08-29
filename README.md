@@ -35,6 +35,18 @@ src/
   index.ts              public exports
 ```
 
+## Visual scenarios
+
+`npm test` renders hand-authored hex cases (coverage, paths, obstacles) to
+`scenarios/*.svg` plus a `scenarios/index.html` gallery — open it in a browser or
+VS Code preview to eyeball them. Test-only; the directory is gitignored.
+
+Each utility gets its own scenario package: `src/<name>.visual.test.ts`, writing
+`<name>-<case>.svg`. The gallery scans the whole `scenarios/` folder and groups
+by package, so every utility's cases show up together after one `npm test`.
+Shared code lives in `src/test-utils/` (`scenario.ts`, `render-scenario.ts`,
+`write-scenario.ts`).
+
 ## Adding a utility (per session)
 
 1. One concern per file: `src/<name>.ts` + `src/<name>.test.ts`.
