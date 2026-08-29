@@ -5,13 +5,7 @@ import {
   cubeKey,
   type Cube,
 } from "../coordinates/coordinates.js";
-
-/** Cube distance — the minimum number of single-hex steps between `a` and `b`. */
-function cubeDistance(a: Cube, b: Cube): number {
-  return (
-    (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z)) / 2
-  );
-}
+import { cubeDistance } from "../distance/distance.js";
 
 /**
  * The shortest hex path from `start` to `end` that never steps onto a blocked

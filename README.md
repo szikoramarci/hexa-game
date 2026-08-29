@@ -33,14 +33,21 @@ One folder per utility, holding its impl, unit test, and visual test:
 ```
 src/
   coordinates/    Cube type, constructor, validation, vector math, directions
+  distance/       cubeDistance — step count between two hexes
+  layout/         cubeToPixel / pixelToCube / cubeRound — pointy-top pixel map
   movement/       reachableCubes — BFS flood fill within a step budget
   pixel-range/    pixelRangeCubes — hexes whose centre falls in a pixel circle
   line-coverage/  lineCoverageCubes — every hex a centre-to-centre segment crosses
   pathfind/       pathCubes — shortest obstacle-free hex path (A*)
   arrow/          hexArrow — styled SVG arrow through a list of hex centres
-  test-utils/     shared visual-scenario renderer (scenario, render, write)
+  test-utils/     shared scenario renderer + interactive movement playground
   index.ts        public exports
 ```
+
+`cubeToPixel(c, size?)` / `pixelToCube(px, py, size?)` are the one pointy-top
+layout map (`px = size·√3·(x + z/2)`, `py = size·1.5·z`, default `size` 26) —
+the renderer, `hexArrow` and the playground all share it. `cubeRound` snaps a
+fractional cube to the nearest hex. `cubeDistance(a, b)` is `(|dx|+|dy|+|dz|)/2`.
 
 `lineCoverageCubes(start, end)` is the *supercover* line: every hex whose closed
 hexagon the segment between the two centres touches. Crossing a shared edge
@@ -68,15 +75,28 @@ orthogonal. Scenarios carry arrows via the `arrows` field.
 
 ## Visual scenarios
 
-`npm test` renders hand-authored hex cases (coverage, paths, obstacles) to
-`scenarios/*.svg` plus a `scenarios/index.html` gallery — open it in a browser or
-VS Code preview to eyeball them. Test-only; the directory is gitignored.
+`npm test` renders hand-authored hex cases to `scenarios/` (test-only, gitignored).
+Open `scenarios/index.html` in a **real browser** — it's a nav landing page:
 
-Each utility gets its own scenario package: `src/<name>/<name>.visual.test.ts`,
-writing `<name>-<case>.svg`. The gallery scans the whole `scenarios/` folder and
-groups by package, so every utility's cases show up together after one
-`npm test`. Shared code lives in `src/test-utils/` (`scenario.ts`,
-`render-scenario.ts`, `write-scenario.ts`).
+```
+scenarios/
+  index.html                     nav: "Utility methods" + "Actions"
+  utilities/<name>/index.html     one utility's static SVG cases
+  actions/<name>/index.html       one action, all cases on one interactive page
+```
+
+Each utility gets a scenario package `src/<name>/<name>.visual.test.ts` calling
+`writeScenario("<name>", "<case>", scenario)`. Pages rebuild from disk each run,
+aggregating across the parallel vitest workers.
+
+The first **action** is the piece-movement playground
+(`actions/movement/index.html`) — every case on one page, each a clickable
+board: hover a reachable hex for the dashed move arrow, click to walk the piece
+there hex-by-hex, obstacles block. Authored in
+`src/movement/movement.playground.test.ts`; see `docs/movement-playground.md`.
+
+Shared test-only code is in `src/test-utils/` (`scenario.ts`, `board.ts`,
+`render-scenario.ts`, `write-scenario.ts`, `gallery.ts`, `movement-playground.ts`).
 
 ## Adding a utility (per session)
 
@@ -89,7 +109,7 @@ groups by package, so every utility's cases show up together after one
 
 ### Planned utilities
 
-- `distance` — cube distance between two hexes
+- ~~`distance`~~ — cube distance between two hexes *(done)*
 - `neighbors` — adjacent hexes (via `CUBE_DIRECTIONS`)
 - `range` / `ring` / `spiral` — hexes within N steps
 - ~~`pixel-range`~~ — hexes whose centre falls in a pixel circle *(done)*
@@ -98,4 +118,4 @@ groups by package, so every utility's cases show up together after one
 - `line` — single-width hexes on a straight line (lerp + cube rounding)
 - `rotate` / `reflect` — symmetry operations
 - ~~`pathfind`~~ — shortest obstacle-free hex path via A* *(done)*
-- `layout` — cube ↔ pixel for a lightweight visual check
+- ~~`layout`~~ — cube ↔ pixel (`cubeToPixel` / `pixelToCube` / `cubeRound`) *(done)*

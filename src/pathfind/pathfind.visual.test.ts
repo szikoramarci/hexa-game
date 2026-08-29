@@ -1,14 +1,9 @@
 import { describe, it } from "vitest";
 import { cube, type Cube } from "../coordinates/coordinates.js";
+import { cubeDistance } from "../distance/distance.js";
 import { pathCubes } from "./pathfind.js";
 import type { Scenario } from "../test-utils/scenario.js";
 import { writeScenario } from "../test-utils/write-scenario.js";
-
-/** Prefix every scenario file so packages share the flat `scenarios/` dir. */
-const pkg = (name: string) => `pathfind-${name}`;
-
-const cubeDistance = (a: Cube, b: Cube) =>
-  (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z)) / 2;
 
 /** A straight line of `count` hexes from `origin`, stepping by `dir`. */
 function wall(origin: Cube, dir: Cube, count: number): Cube[] {
@@ -40,7 +35,7 @@ describe("pathfind · A* around obstacles", () => {
       // The straight centre-to-centre reference chord.
       lines: [[start, end]],
     };
-    writeScenario(pkg(name), s);
+    writeScenario("pathfind", name, s);
   };
 
   it("open — no obstacles, a clean diagonal", () => {

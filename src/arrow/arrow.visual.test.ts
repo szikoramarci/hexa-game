@@ -3,16 +3,13 @@ import { cube, type Cube } from "../coordinates/coordinates.js";
 import type { ArrowSpec, Scenario } from "../test-utils/scenario.js";
 import { writeScenario } from "../test-utils/write-scenario.js";
 
-/** Prefix every scenario file so packages share the flat `scenarios/` dir. */
-const pkg = (name: string) => `arrow-${name}`;
-
 /** A horizontal run of `count` hexes on cube row `z`, starting at `xFrom`. */
 const row = (z: number, xFrom: number, count: number): Cube[] =>
   Array.from({ length: count }, (_, i) =>
     cube(xFrom + i, -(xFrom + i) - z, z),
   );
 
-const draw = (name: string, s: Scenario) => writeScenario(pkg(name), s);
+const draw = (name: string, s: Scenario) => writeScenario("arrow", name, s);
 
 /** First and last hex of an arrow, for the player / goal markers. */
 const ends = (specs: ArrowSpec[]): Pick<Scenario, "player" | "goal"> => {

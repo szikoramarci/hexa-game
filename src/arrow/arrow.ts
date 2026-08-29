@@ -1,4 +1,5 @@
 import { cubeEquals, type Cube } from "../coordinates/coordinates.js";
+import { cubeToPixel } from "../layout/layout.js";
 
 /**
  * Shaft geometry:
@@ -54,14 +55,6 @@ const f = (n: number): string => n.toFixed(2);
 interface Pt {
   x: number;
   y: number;
-}
-
-/** Pointy-top cube -> pixel. Cube -> axial is `q = x`, `r = z`. */
-function toPixel(c: Cube, size: number): Pt {
-  return {
-    x: size * Math.sqrt(3) * (c.x + c.z / 2),
-    y: size * 1.5 * c.z,
-  };
 }
 
 /** Unit vector from `a` to `b`; `{x:1,y:0}` if the two coincide. */
@@ -151,7 +144,7 @@ export function hexArrow(hexes: Cube[], style?: ArrowStyle): string {
   const headLen = size * 0.55 + stroke * 1.6;
   const headHalfWidth = size * 0.3 + stroke * 1.1;
 
-  const centres = path.map((h) => toPixel(h, size));
+  const centres = path.map((h) => cubeToPixel(h, size));
   const isJump = shape === "curved" && centres.length === 2 && bow !== 0;
   const pts = isJump
     ? [centres[0]!, jumpApex(centres[0]!, centres[1]!, bow, size), centres[1]!]

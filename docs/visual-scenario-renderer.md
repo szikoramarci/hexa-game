@@ -99,16 +99,20 @@ Rules:
 ## 3. Writer — `write-scenario.ts`
 
 ```ts
-export function writeScenario(name: string, s: Scenario, opts?: RenderOptions): string;
+export function writeScenario(
+  group: string, name: string, s: Scenario, opts?: RenderOptions,
+): string;
 ```
 
-- `mkdirSync("scenarios", { recursive: true })`, write `scenarios/<name>.svg`,
-  return the SVG string.
-- Module-level `afterAll` (from `vitest`): write `scenarios/index.html` — a
-  flex-wrap gallery of `<figure><figcaption>name</figcaption><img src="name.svg"></figure>`
-  for every name written this run. Idempotent; rewriting per test file is fine.
-- Always writes (no env gating — a few small SVGs cost milliseconds and the dir
-  is gitignored).
+- Write `scenarios/utilities/<group>/<name>.svg`, return the SVG string.
+- `src/test-utils/gallery.ts` owns the folder layout and the pages:
+  `registerUtilityGroup(group)` rebuilds that group's `index.html` (an `<img>`
+  gallery) from the `.svg` files on disk plus a `_meta.json`, then the landing
+  `scenarios/index.html` — a nav grouping **utility methods** and **actions**,
+  built by scanning `utilities/*/` and `actions/*/`.
+- Always writes (no env gating — small SVGs cost milliseconds, dir is gitignored).
+- Interactive **action** pages are written by their own generator (see
+  `docs/movement-playground.md`) via `registerActionGroup`.
 
 ## 4. `.gitignore`
 
@@ -134,4 +138,4 @@ tests for `reachableCubes`; assert with `.toHaveLength(...)` where cheap.
 - Coord labels + legend behind an option.
 - Dot renderer (`<circle>` at centers) as an alternative to polygons.
 - Ring+core rendering for hexes with both a region and a marker status.
-- Interactive `playground/index.html` once `distance` / `pathfind` exist.
+- ~~Interactive playground~~ — see `docs/movement-playground.md` *(done)*.

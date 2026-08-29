@@ -7,9 +7,6 @@ import { writeScenario } from "../test-utils/write-scenario.js";
 
 const origin = cube(0, 0, 0);
 
-/** Prefix every scenario file so packages share the flat `scenarios/` dir. */
-const pkg = (name: string) => `movement-${name}`;
-
 /** Straight line of `count` hexes from `from`, stepping by `dir`. */
 function wall(from: Cube, dir: Cube, count: number): Cube[] {
   const hexes: Cube[] = [];
@@ -33,7 +30,7 @@ describe("movement · reachable — no obstacles", () => {
         player: [origin],
         reachable,
       };
-      writeScenario(pkg(`open-${steps}`), s);
+      writeScenario("movement", `open-${steps}`, s);
     });
   }
 });
@@ -47,7 +44,7 @@ describe("movement · reachable — with obstacles, 4 steps", () => {
       obstacle,
       reachable: reachableCubes(origin, 4, obstacle),
     };
-    writeScenario(pkg(name), s);
+    writeScenario("movement", name, s);
   };
 
   it("one obstacle next to the player", () => {
@@ -92,7 +89,7 @@ describe("movement · reachable — with obstacles, 4 steps", () => {
     ];
     const reachable = reachableCubes(origin, 4, ring);
     expect(reachable).toHaveLength(1);
-    writeScenario(pkg("walled-in"), {
+    writeScenario("movement", "walled-in", {
       radius: 5,
       title: "walled in — 4 steps",
       player: [origin],

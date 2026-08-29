@@ -17,6 +17,14 @@ export type {
   ArrowWeight,
 } from "./arrow/arrow.js";
 export { hexArrow } from "./arrow/arrow.js";
+export { cubeDistance } from "./distance/distance.js";
+export type { Pixel } from "./layout/layout.js";
+export {
+  DEFAULT_HEX_SIZE,
+  cubeRound,
+  cubeToPixel,
+  pixelToCube,
+} from "./layout/layout.js";
 export { lineCoverageCubes } from "./line-coverage/line-coverage.js";
 export { reachableCubes } from "./movement/movement.js";
 export { pathCubes } from "./pathfind/pathfind.js";

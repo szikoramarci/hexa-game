@@ -1,16 +1,11 @@
 import { describe, it } from "vitest";
 import { cube, type Cube } from "../coordinates/coordinates.js";
+import { cubeDistance } from "../distance/distance.js";
 import { pixelRangeCubes } from "./pixel-range.js";
 import type { Scenario } from "../test-utils/scenario.js";
 import { writeScenario } from "../test-utils/write-scenario.js";
 
 const origin = cube(0, 0, 0);
-
-/** Prefix every scenario file so packages share the flat `scenarios/` dir. */
-const pkg = (name: string) => `pixelrange-${name}`;
-
-const cubeDistance = (a: Cube, b: Cube) =>
-  (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z)) / 2;
 
 /** The hex-distance ring at exactly `radius` steps from `center`. */
 function hexRing(center: Cube, radius: number): Cube[] {
@@ -32,7 +27,7 @@ describe("pixel-range · circle query", () => {
       player: [origin],
       reachable: pixelRangeCubes(origin, range),
     };
-    writeScenario(pkg(name), s);
+    writeScenario("pixel-range", name, s);
   };
 
   it("range 2 — barely distinguishable from a hex disc", () => {
@@ -48,7 +43,7 @@ describe("pixel-range · circle query", () => {
   });
 
   it("range 8 against the hex-distance ring at 8 (obstacle colour = contrast only)", () => {
-    writeScenario(pkg("r8-vs-hex"), {
+    writeScenario("pixel-range", "r8-vs-hex", {
       radius: 10,
       title: "pixel range 8 vs hex ring 8 (grey)",
       player: [origin],
@@ -59,7 +54,7 @@ describe("pixel-range · circle query", () => {
 
   it("off-centre", () => {
     const center = cube(3, -1);
-    writeScenario(pkg("offset"), {
+    writeScenario("pixel-range", "offset", {
       radius: 8,
       title: "pixel range 4 around (3,-1,-2)",
       player: [center],

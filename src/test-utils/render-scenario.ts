@@ -1,5 +1,7 @@
 import { cubeKey, type Cube } from "../coordinates/coordinates.js";
 import { hexArrow } from "../arrow/arrow.js";
+import { cubeToPixel } from "../layout/layout.js";
+import { disc, hexCorners } from "./board.js";
 import type { HexStatus, Scenario } from "./scenario.js";
 
 export interface RenderOptions {
@@ -30,37 +32,6 @@ const PRIORITY: readonly HexStatus[] = [
 
 const f = (n: number): string => n.toFixed(2);
 
-/** Pointy-top cube -> pixel. Cube -> axial is `q = x`, `r = z`. */
-function toPixel(c: Cube, size: number): { x: number; y: number } {
-  return {
-    x: size * Math.sqrt(3) * (c.x + c.z / 2),
-    y: size * 1.5 * c.z,
-  };
-}
-
-/** The six corners of a pointy-top hex centred at `(cx, cy)`. */
-function hexCorners(cx: number, cy: number, size: number): string {
-  const pts: string[] = [];
-  for (let i = 0; i < 6; i++) {
-    const angle = (Math.PI / 180) * (60 * i - 30);
-    pts.push(`${f(cx + size * Math.cos(angle))},${f(cy + size * Math.sin(angle))}`);
-  }
-  return pts.join(" ");
-}
-
-/** Every hex of the disc of the given radius, row by row. */
-function disc(radius: number): Cube[] {
-  const hexes: Cube[] = [];
-  for (let x = -radius; x <= radius; x++) {
-    const yMin = Math.max(-radius, -x - radius);
-    const yMax = Math.min(radius, -x + radius);
-    for (let y = yMin; y <= yMax; y++) {
-      hexes.push({ x, y, z: -x - y });
-    }
-  }
-  return hexes;
-}
-
 function statusSets(s: Scenario): Map<HexStatus, Set<string>> {
   const sets = new Map<HexStatus, Set<string>>();
   const collect = (status: HexStatus, hexes: Iterable<Cube> | undefined) => {
@@ -86,7 +57,7 @@ export function renderScenario(s: Scenario, opts?: RenderOptions): string {
   const sets = statusSets(s);
 
   const hexes = disc(s.radius);
-  const centres = hexes.map((h) => toPixel(h, size));
+  const centres = hexes.map((h) => cubeToPixel(h, size));
 
   let minX = Infinity;
   let minY = Infinity;
@@ -124,7 +95,7 @@ export function renderScenario(s: Scenario, opts?: RenderOptions): string {
   if (path.length >= 2) {
     const line = path
       .map((h) => {
-        const p = toPixel(h, size);
+        const p = cubeToPixel(h, size);
         return `${f(p.x)},${f(p.y)}`;
       })
       .join(" ");
@@ -139,7 +110,7 @@ export function renderScenario(s: Scenario, opts?: RenderOptions): string {
     if (pts.length < 2) continue;
     const line = pts
       .map((h) => {
-        const p = toPixel(h, size);
+        const p = cubeToPixel(h, size);
         return `${f(p.x)},${f(p.y)}`;
       })
       .join(" ");

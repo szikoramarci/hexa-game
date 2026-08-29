@@ -1,14 +1,9 @@
 import { describe, it } from "vitest";
 import { cube, type Cube } from "../coordinates/coordinates.js";
+import { cubeDistance } from "../distance/distance.js";
 import { lineCoverageCubes } from "./line-coverage.js";
 import type { Scenario } from "../test-utils/scenario.js";
 import { writeScenario } from "../test-utils/write-scenario.js";
-
-/** Prefix every scenario file so packages share the flat `scenarios/` dir. */
-const pkg = (name: string) => `linecoverage-${name}`;
-
-const cubeDistance = (a: Cube, b: Cube) =>
-  (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z)) / 2;
 
 describe("line-coverage · supercover line", () => {
   const draw = (name: string, title: string, start: Cube, end: Cube, radius?: number) => {
@@ -21,7 +16,7 @@ describe("line-coverage · supercover line", () => {
       // The raw centre-to-centre segment the supercover is derived from.
       lines: [[start, end]],
     };
-    writeScenario(pkg(name), s);
+    writeScenario("line-coverage", name, s);
   };
 
   it("adjacent — the two-hex minimum", () => {
