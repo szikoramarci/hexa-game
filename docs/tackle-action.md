@@ -106,7 +106,8 @@ animates a lunge, not a walk.
 ## TODOs to leave in code
 
 - `// TODO(foul): a foul is resolved by its own action — free kick / card / advantage. For now: phase "foul", ball unchanged, defender's MP already spent.`
-- `// TODO(loose-ball): tie → loose ball. Later: scatter (domain-model "Loose ball scatter"). For now: phase "looseBall", ball unchanged.`
+- ~~loose-ball TODO~~ — **done**: the tie branch now calls `looseBall` and
+  scatters the ball. See `docs/loose-ball.md`.
 
 ## Test scenarios — `move-action.test.ts`
 

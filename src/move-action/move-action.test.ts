@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cube, cubeEquals, cubeKey, type Cube } from "../coordinates/coordinates.js";
 import { rollDie, seedRng } from "../dice/dice.js";
+import { looseBall } from "../loose-ball/loose-ball.js";
 import { reachableCubes } from "../movement/movement.js";
 import {
   applyMove,
@@ -702,11 +703,72 @@ describe("moveAction reducer — the tackle", () => {
     expect(moveAction(s, { type: "selectPiece", pieceId: "att" }).phase).toBe("spent");
   });
 
-  it("a tie is a loose ball — dead end, ball untouched (TODO)", () => {
+  it("a tie scatters the ball from the carrier's hex", () => {
     const s = commitTackle(TIE);
     expect(s.phase).toBe("looseBall");
     expect(moveView(s).looseBall).toMatchObject({ attackerId: "att", defenderId: "def" });
-    expect(s.state.ball).toEqual(origin);
+
+    const scatter = moveView(s).scatter!;
+    expect(scatter.at).toEqual(origin);
+    expect(scatter.route[0]).toEqual(origin);
+    // matches a direct looseBall roll from the challenge's post-tie rng
+    const tie = resolveChallenge(seedRng(TIE), 3, 3);
+    const direct = looseBall(tie.rng, origin, [
+      { id: "att", at: origin },
+      { id: "def", at: cube(1, -1, 0) }, // defender rested at approachEnd
+    ]);
+    expect(scatter.route).toEqual(direct.route);
+    expect(s.state.ball).toEqual(scatter.rest);
+    expect(s.rng).toBe(direct.rng);
+  });
+
+  it("a clear-line tie leaves the ball loose — no carrier", () => {
+    // ring the carrier so the only stoppers are att (on origin, ignored) and def
+    const s = commitTackle(TIE);
+    const scatter = moveView(s).scatter!;
+    if (scatter.caughtBy === null) {
+      expect(ballCarrier(s.state)).toBeNull();
+      expect(s.state.ball).toEqual(scatter.rest);
+    } else {
+      expect(ballCarrier(s.state)?.id).toBe(scatter.caughtBy);
+    }
+  });
+
+  it("a defender on the scatter line collects the loose ball", () => {
+    // Place def where the TIE seed's scatter direction will run it over. Roll
+    // the scatter first to know the line, then seat def one hex along it.
+    const tie = resolveChallenge(seedRng(TIE), 3, 3);
+    const dir = looseBall(tie.rng, origin, []).direction;
+    const onLine = cube(dir.x, dir.y, dir.z);
+    const scene = tackleScene({
+      pieces: [
+        piece({ id: "att", at: origin, team: "home", movePoints: 0 }),
+        piece({ id: "def", at: onLine, team: "away", movePoints: 1 }),
+      ],
+    });
+    let s = initMoveAction(scene, TIE);
+    s = moveAction(s, { type: "selectPiece", pieceId: "def" });
+    s = moveAction(s, { type: "tackle" });
+    let guard = 0;
+    while (s.phase === "tackling" && guard++ < 50) s = moveAction(s, { type: "advance" });
+
+    expect(s.phase).toBe("looseBall");
+    expect(moveView(s).scatter!.caughtBy).toBe("def");
+    expect(ballCarrier(s.state)?.id).toBe("def");
+    expect(s.state.ball).toEqual(onLine);
+  });
+
+  it("replays the scatter from a fixed tie seed", () => {
+    const a = commitTackle(TIE);
+    const b = commitTackle(TIE);
+    expect(moveView(a).scatter).toEqual(moveView(b).scatter);
+    expect(a.state.ball).toEqual(b.state.ball);
+  });
+
+  it("selectPiece / cancel still leave the looseBall phase", () => {
+    const s = commitTackle(TIE);
+    expect(moveAction(s, { type: "selectPiece", pieceId: "att" }).phase).toBe("spent");
+    expect(moveAction(s, { type: "cancel" }).phase).toBe("idle");
   });
 
   it("replays a whole tackle from a fixed seed", () => {

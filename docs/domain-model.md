@@ -100,8 +100,8 @@ The existing `move-action` ball-steal (`d6 <= stealOn`) is a simpler
 placeholder; it will fold into this model.
 
 The tackle challenge is implemented — `resolveChallenge` (generic `d6 + attr`)
-plus the defender lunge, in `move-action`. See `docs/tackle-action.md`. Foul and
-loose ball are `TODO` there.
+plus the defender lunge, in `move-action`. See `docs/tackle-action.md`. A foul
+is still a `TODO` dead end; a tie now scatters the ball (below).
 
 ### Loose ball scatter
 
@@ -114,6 +114,12 @@ When a challenge draws (or a rule calls for it):
    - rolls onto a player's hex → that player picks it up (becomes carrier)
    - crosses `goal` / `outOfField` / etc. → the rules layer decides
      (goal, throw-in, ...)
+
+Implemented as `looseBall(rng, origin, stoppers, die?)` in `src/loose-ball/`,
+wired into `move-action`'s tie branch. The origin hex never stops the ball (the
+just-tackled carrier stands there). Field edges / goals are still deferred —
+the ball may roll off the board and the rules layer reads `rest`'s tags later.
+See `docs/loose-ball.md`.
 
 ### Pickup
 

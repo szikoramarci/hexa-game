@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cube, cubeKey, type Cube } from "../coordinates/coordinates.js";
 import { seedRng } from "../dice/dice.js";
+import { looseBall } from "../loose-ball/loose-ball.js";
 import {
   initMoveAction,
   moveAction,
@@ -142,6 +143,20 @@ const CASES: MovementCase[] = [
       pieces: [
         { at: cube(1, -1, 0), label: "D", movePoints: 2, team: AWAY },
         { at: origin, label: 9, movePoints: 0, team: HOME, hasBall: true },
+      ],
+    },
+  },
+  {
+    title: "loose ball in a crowd — a tie spills it",
+    play: {
+      radius: 4,
+      pieces: [
+        { at: cube(1, -1, 0), label: "D", movePoints: 2, team: AWAY },
+        { at: origin, label: 9, movePoints: 0, team: HOME, hasBall: true },
+        { at: cube(-2, 1, 1), label: "E", movePoints: 0, team: AWAY },
+        { at: cube(0, -2, 2), label: "F", movePoints: 0, team: AWAY },
+        { at: cube(2, 0, -2), label: 7, movePoints: 0, team: HOME },
+        { at: cube(-1, 2, -1), label: 8, movePoints: 0, team: HOME },
       ],
     },
   },
@@ -287,6 +302,14 @@ describe("movement playground page — the tackle", () => {
     expect(html).toContain("reachTackle");
   });
 
+  it("ships the loose-ball scatter — mirror fn, slate arrow, catcher glow", () => {
+    expect(html).toContain("function looseBall(");
+    expect(html).toContain("var SCATTER =");
+    expect(html).toContain(".piece.caught");
+    expect(html).toContain("function rollBall()");
+    expect(html).toContain("scatter d6 dir ");
+  });
+
   it("logs each challenge's dice and a plain result under the board", () => {
     expect(html).toContain('<p class="log" hidden>');
     expect(html).toContain("function challengeLog()");
@@ -313,6 +336,7 @@ describe("movement playground page — the tackle", () => {
       "close down the carrier — a hard tackle",
       "the carrier rides the challenge",
       "shoulder to shoulder — even attributes",
+      "loose ball in a crowd — a tie spills it",
     ]) {
       const i = idx(title);
       const state = caseState(CASES[i]!);
@@ -336,5 +360,26 @@ describe("movement playground page — the tackle", () => {
         expect(moveView(a).relocation).toEqual(relocationOptions(a.state, a.outcome!));
       }
     }
+  });
+
+  it("a tie in the crowd case scatters the ball to where looseBall says", () => {
+    const i = idx("loose ball in a crowd — a tie spills it");
+    const state = caseState(CASES[i]!);
+    const seed = seedRng(`case-${i}`);
+    let s = initMoveAction(state, seed);
+    s = moveAction(s, { type: "selectPiece", pieceId: "case-p0" });
+    s = moveAction(s, { type: "tackle" });
+    let guard = 0;
+    while (s.phase === "tackling" && guard++ < 20) s = moveAction(s, { type: "advance" });
+
+    if (s.phase !== "looseBall") return; // the baked seed didn't tie — nothing to check
+    const view = moveView(s);
+    const direct = looseBall(
+      s.outcome!.roll.rng,
+      view.scatter!.at,
+      s.state.pieces.map((p) => ({ id: p.id, at: p.at })),
+    );
+    expect(view.scatter!.route).toEqual(direct.route);
+    expect(s.state.ball).toEqual(direct.rest);
   });
 });

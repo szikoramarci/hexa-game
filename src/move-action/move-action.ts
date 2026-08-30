@@ -8,6 +8,7 @@ import {
 import type { ArrowStyle } from "../arrow/arrow.js";
 import { cubeDistance } from "../distance/distance.js";
 import { rollDie, seedRng, type Rng } from "../dice/dice.js";
+import { looseBall, type LooseBallRoll } from "../loose-ball/loose-ball.js";
 import { reachableCubes } from "../movement/movement.js";
 import { pathCubes } from "../pathfind/pathfind.js";
 
@@ -469,6 +470,11 @@ export interface MoveActionSnapshot {
    * `cancel` settles it. Also readable in the `foul` / `looseBall` dead ends.
    */
   outcome: TackleOutcome | null;
+  /**
+   * How the ball scattered off a tied challenge. Set the frame `tackling`
+   * resolves to `looseBall`; `null` in every other phase.
+   */
+  scatter: LooseBallRoll | null;
 }
 
 /** One hex segment of a walk, plus who a steal check will roll for. */
@@ -526,14 +532,26 @@ export interface MoveActionView {
   relocation: Cube[] | null;
   /** TODO: fouls get their own action. Set in the `foul` dead end. */
   foul: { attackerId: string; defenderId: string; at: Cube } | null;
-  /** TODO: a tie is a loose ball. Set in the `looseBall` dead end. */
+  /** Who tied and where. Set in the `looseBall` dead end. */
   looseBall: { attackerId: string; defenderId: string; at: Cube } | null;
+  /**
+   * How the ball scattered off the tie — direction, distance, the route it
+   * rolled, where it rests and who (if anyone) caught it. `looseBall` only.
+   */
+  scatter: (LooseBallRoll & { at: Cube }) | null;
 }
 
 /** The interaction fields reset to their `idle` values (fresh `path` array). */
 const idleFields = (): Pick<
   MoveActionSnapshot,
-  "phase" | "activeId" | "target" | "path" | "stepIndex" | "steal" | "outcome"
+  | "phase"
+  | "activeId"
+  | "target"
+  | "path"
+  | "stepIndex"
+  | "steal"
+  | "outcome"
+  | "scatter"
 > => ({
   phase: "idle",
   activeId: null,
@@ -542,6 +560,7 @@ const idleFields = (): Pick<
   stepIndex: 0,
   steal: null,
   outcome: null,
+  scatter: null,
 });
 
 /**
@@ -638,9 +657,25 @@ function resolveTackle(snap: MoveActionSnapshot): MoveActionSnapshot {
   // advantage). For now: stop in `foul`, ball unchanged, points already spent.
   if (foul) return { ...base, state: moved, phase: "foul" };
 
-  // TODO(loose-ball): a tie is a loose ball — later, scatter (domain-model
-  // "Loose ball scatter"). For now: stop in `looseBall`, ball unchanged.
-  if (roll.tie) return { ...base, state: moved, phase: "looseBall" };
+  // A tie spills the ball: scatter it from the carrier's hex (d6 direction, d6
+  // distance) and let the first player on the line catch it. The just-tackled
+  // carrier sits on the origin, which never counts as a stopping hex. Field
+  // edges / goals are still deferred — see `docs/loose-ball.md`.
+  if (roll.tie) {
+    const scatter = looseBall(
+      roll.rng,
+      outcome.at,
+      moved.pieces.map((p) => ({ id: p.id, at: p.at })),
+      snap.state.stealDie ?? 6,
+    );
+    return {
+      ...base,
+      state: { ...moved, ball: copy(scatter.rest) },
+      rng: scatter.rng,
+      scatter,
+      phase: "looseBall",
+    };
+  }
 
   // Hand the ball to the winner where they stand; `relocate` / `cancel` moves it.
   const winnerHex = roll.winner === "defender" ? approachEnd : outcome.at;
@@ -681,6 +716,7 @@ export function moveAction(
         rng: snap.rng,
         steal: null,
         outcome: null,
+        scatter: null,
       };
     }
 
@@ -778,6 +814,7 @@ export function moveAction(
             rng,
             steal: { by: check.by, at: copy(hex), rolls: check.rolls },
             outcome: null,
+            scatter: null,
           };
         }
       }
@@ -797,6 +834,7 @@ export function moveAction(
         rng,
         steal: null,
         outcome: null,
+        scatter: null,
       };
     }
 
@@ -895,5 +933,9 @@ export function moveView(snap: MoveActionSnapshot): MoveActionView {
         : null,
     foul: snap.phase === "foul" ? marker : null,
     looseBall: snap.phase === "looseBall" ? marker : null,
+    scatter:
+      snap.phase === "looseBall" && snap.scatter && o
+        ? { ...snap.scatter, at: copy(o.at) }
+        : null,
   };
 }

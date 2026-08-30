@@ -230,6 +230,9 @@ const CASES_CSS = `
   .piece.selected { filter: drop-shadow(0 0 3px #1560c4); }
   .piece.tackle-target { filter: drop-shadow(0 0 3px ${COLOR.danger})
     drop-shadow(0 0 3px ${COLOR.danger}); cursor: crosshair; }
+  .piece.caught { filter: drop-shadow(0 0 3px #6a5acd) drop-shadow(0 0 3px #6a5acd); }
+  .ball.loose { animation: looseBall 1.1s ease-in-out infinite; }
+  @keyframes looseBall { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
   .piece.dim { opacity: .5; }
   .piece .marker { transition: transform .1s; }
   .piece.wary .marker { animation: wary .16s linear infinite; }
@@ -263,9 +266,11 @@ const CASES_CSS = `
  * It also mirrors the **tackle**: a selected defender that can reach the enemy
  * carrier's hex clicks it to lunge (`tackling`), spends all its move points, and
  * a `d6 + tackling` vs `d6 + dribbling` challenge (`resolveChallenge`) decides
- * the ball. A defender `1` is a foul and equal scores a loose ball — both dead
- * ends, ball unchanged (TODO). The winner's controller then clicks a green hex
- * to `relocate` the carrying piece, or `stay` to keep the fallback spot.
+ * the ball. A defender `1` is a foul (dead end, TODO); equal scores a loose
+ * ball — `looseBall` scatters it (d6 direction, d6 distance) from the carrier's
+ * hex and the first player on the line catches it. The winner's controller then
+ * clicks a green hex to `relocate` the carrying piece, or `stay` for the
+ * fallback spot.
  *
  * Kept honest by the playground test's cross-check against the real modules. No
  * backticks / `${` so it embeds verbatim.
@@ -275,6 +280,7 @@ const SCRIPT = [
   "var STEP_MS = " + STEP_MS + ";",
   "var ARROW = '" + COLOR.arrow + "';",
   "var DANGER = '" + COLOR.danger + "';",
+  "var SCATTER = '#6a5acd';",
   "function parse(k) { return k.split(',').map(Number); }",
   "function neighbours(key) {",
   "  var p = parse(key);",
@@ -298,6 +304,22 @@ const SCRIPT = [
   "  var as = a[0] + attA, ds = d[0] + defA, tie = as === ds;",
   "  return { attackerRoll: a[0], defenderRoll: d[0], attackerScore: as, defenderScore: ds,",
   "           tie: tie, winner: tie ? null : (as > ds ? 'attacker' : 'defender'), rng: d[1] };",
+  "}",
+  "// loose-ball scatter, mirrors src/loose-ball: d6 direction, d6 distance, first stopper wins",
+  "function looseBall(s, origin, stoppers, die) {",
+  "  var a = rollDie(s, 6), d = rollDie(a[1], die || 6);",
+  "  var dir = DIRS[a[0] - 1];",
+  "  var op = parse(origin);",
+  "  var at = {};",
+  "  stoppers.forEach(function (st) { at[st.at] = st.id; });",
+  "  var route = [origin], caughtBy = null;",
+  "  for (var step = 1; step <= d[0]; step++) {",
+  "    var hex = (op[0] + dir[0]*step) + ',' + (op[1] + dir[1]*step) + ',' + (op[2] + dir[2]*step);",
+  "    route.push(hex);",
+  "    if (at[hex] != null) { caughtBy = at[hex]; break; }",
+  "  }",
+  "  return { directionRoll: a[0], distanceRoll: d[0], direction: dir, route: route,",
+  "           rest: route[route.length - 1], caughtBy: caughtBy, rng: d[1] };",
   "}",
   "",
   "function initCase(section, DATA) {",
@@ -329,6 +351,8 @@ const SCRIPT = [
   "  var rng = DATA.seed | 0;",
   "  // the last resolved contest (steal or tackle), shown in the .log line until reset",
   "  var lastChallenge = null;",
+  "  // set while the ball animates along a scatter route (loose ball)",
+  "  var ballRollKey = null;",
   "  function piece(id) { return pieces.filter(function (p) { return p.id === id; })[0]; }",
   "  function ballCarrier() { return ball ? pieces.filter(function (p) { return p.at === ball; })[0] || null : null; }",
   "  function attrOf(p, key) {",
@@ -437,7 +461,15 @@ const SCRIPT = [
   "      defAttr: attrOf(def, 'tackling'), attAttr: attrOf(carrier, 'dribbling') };",
   "    var base = { activeId: def.id, target: null, path: [], stepIndex: 0, steal: null, outcome: outcome };",
   "    if (foul) { snap = Object.assign({ phase: 'foul' }, base); return; }",
-  "    if (roll.tie) { snap = Object.assign({ phase: 'looseBall' }, base); return; }",
+  "    if (roll.tie) {",
+  "      var stoppers = pieces.map(function (p) { return { id: p.id, at: p.at }; });",
+  "      var scatter = looseBall(rng, at, stoppers, DATA.stealDie);",
+  "      rng = scatter.rng;",
+  "      ball = scatter.rest;",
+  "      lastChallenge.scatter = scatter;",
+  "      snap = Object.assign({ phase: 'looseBall', scatter: scatter }, base);",
+  "      return;",
+  "    }",
   "    ball = roll.winner === 'defender' ? approachEnd : at;",
   "    snap = Object.assign({ phase: 'relocating' }, base);",
   "  }",
@@ -449,6 +481,7 @@ const SCRIPT = [
   "      snap = { phase: aimingPhase(p), activeId: p.id, target: null, path: [], stepIndex: 0, steal: null, outcome: null };",
   "      tree = flood(p.id);",
   "      lastChallenge = null;",
+  "      ballRollKey = null;",
   "    } else if (ev.type === 'hoverHex') {",
   "      if (snap.phase !== 'aiming') return;",
   "      if (!ev.hex) { snap.target = null; snap.path = []; return; }",
@@ -533,14 +566,15 @@ const SCRIPT = [
   "",
   "  // --- rendering (mirrors moveView) ---",
   "  function svgEl(t) { return document.createElementNS('http://www.w3.org/2000/svg', t); }",
-  "  function drawArrow(path, danger) {",
+  "  function drawArrow(path, color) {",
   "    arrowLayer.replaceChildren();",
   "    if (path.length < 2) return;",
+  "    var col = color || ARROW;",
   "    var pts = path.map(toPixel);",
   "    var poly = svgEl('polyline');",
   "    poly.setAttribute('points', pts.map(function (q) { return q.x.toFixed(2)+','+q.y.toFixed(2); }).join(' '));",
   "    poly.setAttribute('fill', 'none');",
-  "    poly.setAttribute('stroke', danger ? DANGER : ARROW);",
+  "    poly.setAttribute('stroke', col);",
   "    poly.setAttribute('stroke-width', (SIZE * 0.16).toFixed(2));",
   "    poly.setAttribute('stroke-linecap', 'round');",
   "    poly.setAttribute('stroke-linejoin', 'round');",
@@ -557,7 +591,7 @@ const SCRIPT = [
   "      (bx - uy*hw).toFixed(2)+','+(by + ux*hw).toFixed(2),",
   "      (bx + uy*hw).toFixed(2)+','+(by - ux*hw).toFixed(2)",
   "    ].join(' '));",
-  "    head.setAttribute('fill', danger ? DANGER : ARROW);",
+  "    head.setAttribute('fill', col);",
   "    arrowLayer.appendChild(head);",
   "  }",
   "  function placeAt(el, key, dx, dy) {",
@@ -583,7 +617,16 @@ const SCRIPT = [
   "    var dice2 = 'd6 ' + r.defenderRoll + '+' + c.defAttr + ' tackling  vs  d6 ' + r.attackerRoll + '+' +",
   "      c.attAttr + ' dribbling  \\u2192  ' + r.defenderScore + '\\u2013' + r.attackerScore;",
   "    if (c.foul) return { cls: 'steal', text: 'foul \\u2014 defender rolled 1  \\u00b7  ' + dice2 + '  (TODO)' };",
-  "    if (c.winner === null) return { cls: '', text: 'loose ball \\u2014 scores level  \\u00b7  ' + dice2 + '  (TODO)' };",
+  "    if (c.winner === null) {",
+  "      var s = c.scatter, tail = '';",
+  "      if (s) {",
+  "        var hexes = s.route.length - 1;",
+  "        tail = '  \\u00b7  scatter d6 dir ' + s.directionRoll + ', d6 dist ' + s.distanceRoll + '  \\u2192  ' +",
+  "          (s.caughtBy ? piece(s.caughtBy).label + ' collects it after ' + hexes + ' hex' + (hexes === 1 ? '' : 'es')",
+  "                      : 'rolls ' + hexes + ' hex' + (hexes === 1 ? '' : 'es') + ' clear');",
+  "      }",
+  "      return { cls: '', text: 'loose ball \\u2014 scores level  \\u00b7  ' + dice2 + tail };",
+  "    }",
   "    if (c.winner === 'defender') {",
   "      return { cls: 'win', text: 'successful tackle \\u2014 ' + c.defLabel + ' wins the ball  \\u00b7  ' + dice2 };",
   "    }",
@@ -613,10 +656,14 @@ const SCRIPT = [
   "      el.classList.toggle('wary', (p.id === snap.activeId && hazards.size > 0) || (tk && p.id === tk.carrierId));",
   "      el.classList.toggle('robbed', (snap.steal != null && p.id === snap.activeId) || (snap.phase === 'foul' && snap.outcome && p.id === snap.outcome.defenderId));",
   "      el.classList.toggle('tackle-target', tk != null && p.id === tk.carrierId);",
+  "      el.classList.toggle('caught', snap.phase === 'looseBall' && snap.scatter != null && snap.scatter.caughtBy === p.id && !ballRollKey);",
   "    });",
   "    if (ballEl) {",
   "      var bkey = ball;",
   "      if (snap.phase === 'moving' && carrier && carrier.id === snap.activeId) bkey = snap.path[snap.stepIndex];",
+  "      if (ballRollKey) bkey = ballRollKey;",
+  "      var loose = snap.phase === 'looseBall' && (!snap.scatter || !snap.scatter.caughtBy);",
+  "      ballEl.classList.toggle('loose', !!loose && !ballRollKey);",
   "      if (bkey) placeAt(ballEl, bkey, SIZE * 0.4, -SIZE * 0.4);",
   "    }",
   "    var reach = new Set();",
@@ -628,9 +675,10 @@ const SCRIPT = [
   "      el.classList.toggle('hazard', hazards.has(key));",
   "      el.classList.toggle('relo', reloSet.has(key));",
   "    });",
-  "    if (snap.phase === 'tackling') drawArrow(snap.path, true);",
-  "    else if (tk && snap.path.length < 2) drawArrow(tk.path, true);",
-  "    else drawArrow(snap.path, hazards.size > 0);",
+  "    if (snap.phase === 'tackling') drawArrow(snap.path, DANGER);",
+  "    else if (snap.phase === 'looseBall' && snap.scatter) drawArrow(snap.scatter.route, SCATTER);",
+  "    else if (tk && snap.path.length < 2) drawArrow(tk.path, DANGER);",
+  "    else drawArrow(snap.path, hazards.size > 0 ? DANGER : ARROW);",
   "    statusEl.classList.toggle('stolen', snap.phase === 'stopped' || snap.phase === 'foul' || snap.phase === 'looseBall');",
   "    statusEl.classList.toggle('won', snap.phase === 'relocating');",
   "    stayBtn.hidden = snap.phase !== 'relocating';",
@@ -640,7 +688,10 @@ const SCRIPT = [
   "    } else if (snap.phase === 'foul') {",
   "      statusEl.textContent = 'foul \\u2014 defender rolled 1 (TODO)';",
   "    } else if (snap.phase === 'looseBall') {",
-  "      statusEl.textContent = 'loose ball \\u2014 scores level (TODO)';",
+  "      var sc = snap.scatter;",
+  "      statusEl.textContent = !sc ? 'loose ball \\u2014 scores level'",
+  "        : sc.caughtBy ? 'loose ball \\u2014 ' + piece(sc.caughtBy).label + ' pounces on it'",
+  "        : 'loose ball \\u2014 it rolls ' + (sc.route.length - 1) + ' hex' + (sc.route.length - 1 === 1 ? '' : 'es') + ' free';",
   "    } else if (snap.phase === 'relocating') {",
   "      var o = snap.outcome, w = o.winner === 'defender' ? piece(o.defenderId) : piece(o.attackerId);",
   "      var head = o.winner === 'defender' ? 'successful tackle' : 'failed tackle';",
@@ -660,13 +711,28 @@ const SCRIPT = [
   "    logEl.textContent = log ? log.text : '';",
   "  }",
   "",
+  "  // Roll the loose ball along its scatter route, one hex at a time.",
+  "  function rollBall() {",
+  "    var route = snap.scatter.route, i = 0;",
+  "    (function hop() {",
+  "      ballRollKey = route[i]; i++;",
+  "      render();",
+  "      if (i < route.length) setTimeout(hop, STEP_MS);",
+  "      else setTimeout(function () { ballRollKey = null; render(); }, STEP_MS);",
+  "    })();",
+  "  }",
   "  // Walk a committed path (moving or the tackle approach) hex by hex.",
   "  function runWalk() {",
   "    (function stepOn() {",
-  "      if (snap.phase !== 'moving' && snap.phase !== 'tackling') { render(); return; }",
+  "      if (snap.phase !== 'moving' && snap.phase !== 'tackling') {",
+  "        render();",
+  "        if (snap.phase === 'looseBall' && snap.scatter) rollBall();",
+  "        return;",
+  "      }",
   "      dispatch({ type: 'advance' });",
   "      render();",
   "      if (snap.phase === 'moving' || snap.phase === 'tackling') setTimeout(stepOn, STEP_MS);",
+  "      else if (snap.phase === 'looseBall' && snap.scatter) rollBall();",
   "    })();",
   "  }",
   "",
@@ -704,6 +770,7 @@ const SCRIPT = [
   "    snap = idle();",
   "    tree = null;",
   "    lastChallenge = null;",
+  "    ballRollKey = null;",
   "    render();",
   "  });",
   "",
@@ -739,7 +806,9 @@ export function writeMovementPlayground(
     `enemy carrier (glowing red) clicks it to <strong>tackle</strong>: it spends ` +
     `all its move points and a d6 + tackling vs d6 + dribbling challenge decides ` +
     `the ball. The winner clicks a green hex to reposition, or <strong>stay</strong>. ` +
-    `A defender 1 is a foul, level scores a loose ball — both TODO. ` +
+    `A defender 1 is a foul (still TODO); level scores <strong>spill the ball</strong> — ` +
+    `a d6 direction and a d6 distance roll it in a straight line (slate arrow) until a ` +
+    `player on the line pounces on it, else it sits loose where it stops. ` +
     `Every challenge logs its dice and a plain result under the board — ` +
     `<em>successful ball-steal</em>, <em>failed tackle</em>, <em>successful tackle</em>. ` +
     `<strong>reset</strong> re-rolls the seed. Same reducer as <code>move-action</code>.</p>\n` +

@@ -39,6 +39,7 @@ src/
   movement/       reachableCubes — BFS flood fill within a step budget
   pixel-range/    pixelRangeCubes — hexes whose centre falls in a pixel circle
   line-coverage/  lineCoverageCubes — every hex a centre-to-centre segment crosses
+  loose-ball/     looseBall — d6 direction + d6 distance scatter, first player stops it
   pathfind/       pathCubes — shortest obstacle-free hex path (A*)
   arrow/          hexArrow — styled SVG arrow through a list of hex centres
   move-piece/     movePiece — constant-speed hex→hex animation plan (slide / jump)
@@ -64,15 +65,24 @@ so a game replays. Pure; no DOM, no timers, no rendering. See
 A defender that can reach the enemy carrier's hex within its budget may
 `tackle` instead: it lunges (`tackling`), spends all its points, and a
 `d6 + tackling` vs `d6 + dribbling` challenge (`resolveChallenge`) decides the
-ball. A defender `1` is a foul, equal scores a loose ball — both left as `TODO`
-dead ends. The winner's controller then `relocate`s the carrying piece
-(`relocationOptions` — free hexes around the other player) or `cancel`s to the
-fallback spot. See `docs/tackle-action.md`.
+ball. A defender `1` is a foul (still a `TODO` dead end); equal scores a **loose
+ball** — `looseBall(rng, origin, stoppers)` rolls a `d6` direction and a `d6`
+distance and scatters the ball in a straight line from the carrier's hex; the
+first player on the line catches it, otherwise it rests loose where it stops
+(field edges / goals deferred). On a win the winner's controller `relocate`s the
+carrying piece (`relocationOptions` — free hexes around the other player) or
+`cancel`s to the fallback spot. See `docs/tackle-action.md` + `docs/loose-ball.md`.
 
 `cubeToPixel(c, size?)` / `pixelToCube(px, py, size?)` are the one pointy-top
 layout map (`px = size·√3·(x + z/2)`, `py = size·1.5·z`, default `size` 26) —
 the renderer, `hexArrow` and the playground all share it. `cubeRound` snaps a
 fractional cube to the nearest hex. `cubeDistance(a, b)` is `(|dx|+|dy|+|dz|)/2`.
+
+`looseBall(rng, origin, stoppers, die?)` scatters a drawn challenge's ball: a
+`d6` picks one of the six hex directions, a `d<die>` (default 6) the distance,
+and the ball rolls that straight line from `origin`. The first `BallStopper` on
+the line stops it (`caughtBy`); `origin` itself never does. Returns the full
+`route`, the `rest` hex and the advanced `rng`. Pure and replayable.
 
 `lineCoverageCubes(start, end)` is the *supercover* line: every hex whose closed
 hexagon the segment between the two centres touches. Crossing a shared edge
@@ -132,12 +142,15 @@ aggregating across the parallel vitest workers.
   hovering a route past a defender pulses the risky hexes red and the carrier
   shivers, and walking it rolls the steal check. A selected defender that can
   reach the enemy carrier (glowing red) clicks it to **tackle** — the challenge
-  resolves and the winner clicks a green hex to reposition, or **stay**. Each
+  resolves and the winner clicks a green hex to reposition, or **stay**. A tied
+  tackle **spills the ball**: a slate arrow shows the `d6`/`d6` scatter and the
+  ball rolls along it until a player pounces or it comes to rest loose. Each
   steal / tackle challenge logs its dice and a plain result under the board
-  (*successful ball-steal*, *failed tackle*, *successful tackle*…). `reset`
+  (*successful ball-steal*, *failed tackle*, *loose ball … scatter …*). `reset`
   re-rolls the seed. The inline script mirrors the `move-action` reducer,
-  tackle included. Authored in `src/movement/movement.playground.test.ts`; see
-  `docs/move-action.md` + `docs/tackle-action.md`.
+  tackle and scatter included. Authored in
+  `src/movement/movement.playground.test.ts`; see `docs/move-action.md` +
+  `docs/tackle-action.md` + `docs/loose-ball.md`.
 - `actions/move-piece/index.html` — click a hex to send the pieces (player disc,
   striped ball) there via `movePiece`; toggle ground / jump. Long moves stay
   snappy (they accelerate); a jump zooms up over the gap. Authored in
@@ -167,7 +180,8 @@ Shared test-only code is in `src/test-utils/` (`scenario.ts`, `board.ts`,
 - ~~`arrow`~~ — styled SVG arrow: route through hex centres, or a 2-hex jump arc *(done)*
 - ~~`move-piece`~~ — constant-speed hex→hex animation plan, ground slide or zooming jump *(done)*
 - ~~`move-action`~~ — the movement action: reachable + aim + walk + ball-steal, direct fns or event reducer *(done)*
-- ~~`tackle`~~ — defender lunge onto the carrier + `d6 + attr` challenge, folded into `move-action` (`resolveChallenge`, `reachTackle`, relocation); foul + loose ball are TODO *(done)*
+- ~~`tackle`~~ — defender lunge onto the carrier + `d6 + attr` challenge, folded into `move-action` (`resolveChallenge`, `reachTackle`, relocation); foul is TODO *(done)*
+- ~~`loose-ball`~~ — `looseBall` d6-direction / d6-distance scatter of a drawn challenge, wired into the tackle tie; goals + field edges deferred *(done)*
 - `line` — single-width hexes on a straight line (lerp + cube rounding)
 - `rotate` / `reflect` — symmetry operations
 - ~~`pathfind`~~ — shortest obstacle-free hex path via A* *(done)*

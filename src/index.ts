@@ -28,6 +28,8 @@ export {
   pixelToCube,
 } from "./layout/layout.js";
 export { lineCoverageCubes } from "./line-coverage/line-coverage.js";
+export type { BallStopper, LooseBallRoll } from "./loose-ball/loose-ball.js";
+export { looseBall } from "./loose-ball/loose-ball.js";
 export type {
   ChallengeRoll,
   MoveActionEvent,

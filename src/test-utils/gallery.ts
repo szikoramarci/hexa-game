@@ -30,6 +30,8 @@ const BLURB: Record<string, string> = {
   arrow: "Styled SVG arrows — routes through hex centres, plus 2-hex jump arcs.",
   "line-coverage":
     "Every hex a centre-to-centre segment crosses (the supercover line).",
+  "loose-ball":
+    "looseBall — d6 direction, d6 distance; the ball rolls till a player stops it.",
   movement: "reachableCubes — BFS flood fill within a step budget.",
   pathfind: "pathCubes — shortest obstacle-free hex path via A*.",
   "pixel-range": "pixelRangeCubes — hexes whose centre falls in a pixel circle.",
