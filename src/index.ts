@@ -30,8 +30,11 @@ export {
 export { lineCoverageCubes } from "./line-coverage/line-coverage.js";
 export type { BallStopper, LooseBallRoll } from "./loose-ball/loose-ball.js";
 export { looseBall } from "./loose-ball/loose-ball.js";
+export type { FoulRoll } from "./foul/foul.js";
+export { pacePenalty, resolveFoul, tackleFoul } from "./foul/foul.js";
 export type {
   ChallengeRoll,
+  FoulDecision,
   MoveActionEvent,
   MoveActionSnapshot,
   MoveActionState,
@@ -45,6 +48,7 @@ export type {
   TackleReach,
 } from "./move-action/move-action.js";
 export {
+  applyFoul,
   applyMove,
   applyTackle,
   ballCarrier,
@@ -62,7 +66,6 @@ export {
   reachTackle,
   relocationOptions,
   resolveChallenge,
-  tackleFoul,
   tackleTarget,
 } from "./move-action/move-action.js";
 export type {

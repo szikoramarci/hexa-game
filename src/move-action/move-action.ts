@@ -8,6 +8,7 @@ import {
 import type { ArrowStyle } from "../arrow/arrow.js";
 import { cubeDistance } from "../distance/distance.js";
 import { rollDie, seedRng, type Rng } from "../dice/dice.js";
+import { resolveFoul, tackleFoul, type FoulRoll } from "../foul/foul.js";
 import { looseBall, type LooseBallRoll } from "../loose-ball/loose-ball.js";
 import { reachableCubes } from "../movement/movement.js";
 import { pathCubes } from "../pathfind/pathfind.js";
@@ -47,9 +48,19 @@ export interface Piece {
   team: string;
   /**
    * Contest attributes, integers `1..6` (see `docs/domain-model.md`). Missing
-   * ones fall back to {@link MoveActionState.defaultAttr}.
+   * ones fall back to {@link MoveActionState.defaultAttr}. Pace is `movePoints`,
+   * not an attr.
    */
-  attrs?: { dribbling?: number; tackling?: number };
+  attrs?: { dribbling?: number; tackling?: number; resilience?: number };
+  /**
+   * Carries a foul injury — `-2` move points, and it sticks: a future turn
+   * refresh reads this and keeps docking the pace. Set by {@link applyFoul}.
+   */
+  injured?: boolean;
+  /** Yellow cards shown this game. A second one is a red — see {@link sentOff}. */
+  yellows?: number;
+  /** Sent off after a second yellow. The rules layer takes it off the board. */
+  sentOff?: boolean;
 }
 
 /** The slice of game state the movement action reads and writes. */
@@ -67,6 +78,11 @@ export interface MoveActionState {
   stealOn?: number;
   /** Attribute value used when a {@link Piece} omits one. Default `3`. */
   defaultAttr?: number;
+  /**
+   * Referee strictness, `3..6`, rolled once at kick-off. A foul's card `d6` at
+   * or above this books the fouler. Default `4`.
+   */
+  refereeLeniency?: number;
 }
 
 /** An {@link ArrowStyle} plus the hexes to draw it through — feeds `hexArrow`. */
@@ -248,7 +264,7 @@ export function applyMove(
 function attrOf(
   state: MoveActionState,
   piece: Piece,
-  key: "dribbling" | "tackling",
+  key: "dribbling" | "tackling" | "resilience",
 ): number {
   return piece.attrs?.[key] ?? state.defaultAttr ?? 3;
 }
@@ -359,11 +375,6 @@ export function resolveChallenge(
   };
 }
 
-/** The tackle-specific rule on top of {@link resolveChallenge}: a defender `1`. */
-export function tackleFoul(defenderRoll: number): boolean {
-  return defenderRoll === 1;
-}
-
 /** A resolved tackle, carried until the winner's controller repositions. */
 export interface TackleOutcome {
   defenderId: string;
@@ -422,6 +433,34 @@ export function applyTackle(
   };
 }
 
+/** The attacking controller's call once a foul is resolved. */
+export type FoulDecision = "play" | "stop";
+
+/**
+ * Apply a resolved {@link FoulRoll} to state: the fouled carrier picks up the
+ * `injured` tag and loses 2 move points — once; a second injury is a no-op. The
+ * fouler's `yellows` / `sentOff` update when booked. The ball is untouched (the
+ * carrier keeps it until the advantage decision). Returns a fresh state.
+ */
+export function applyFoul(
+  state: MoveActionState,
+  outcome: TackleOutcome,
+  foul: FoulRoll,
+): MoveActionState {
+  return {
+    ...state,
+    pieces: state.pieces.map((p) => {
+      if (p.id === outcome.attackerId && foul.injured && !p.injured) {
+        return { ...p, injured: true, movePoints: Math.max(0, p.movePoints - 2) };
+      }
+      if (p.id === outcome.defenderId && foul.booked) {
+        return { ...p, yellows: foul.yellows, sentOff: foul.sentOff };
+      }
+      return p;
+    }),
+  };
+}
+
 // --- event reducer --------------------------------------------------------
 
 /**
@@ -449,7 +488,12 @@ export type MoveActionEvent =
   /** Lunge the active defender onto the reachable ball carrier. */
   | { type: "tackle"; hex?: Cube }
   /** Place the tackle winner on one of {@link MoveActionView.relocation}. */
-  | { type: "relocate"; hex: Cube };
+  | { type: "relocate"; hex: Cube }
+  /**
+   * The attacking controller's call after a foul: `play` on (advantage) or
+   * `stop` for the set piece. Ignored once the fouler is `sentOff`.
+   */
+  | { type: "foulDecision"; play: boolean };
 
 /** The full, serialisable state of one movement action in progress. */
 export interface MoveActionSnapshot {
@@ -475,6 +519,16 @@ export interface MoveActionSnapshot {
    * resolves to `looseBall`; `null` in every other phase.
    */
   scatter: LooseBallRoll | null;
+  /**
+   * The referee's response to a foul — injury + card rolls. Set the frame
+   * `tackling` resolves to `foul`; `null` in every other phase.
+   */
+  foulRoll: FoulRoll | null;
+  /**
+   * The attacking controller's advantage call in the `foul` phase. `null` while
+   * awaiting it; forced to `"stop"` up front when the fouler is `sentOff`.
+   */
+  decision: FoulDecision | null;
 }
 
 /** One hex segment of a walk, plus who a steal check will roll for. */
@@ -530,8 +584,28 @@ export interface MoveActionView {
     | null;
   /** Legal spots for the tackle winner — `relocating` only, may be empty. */
   relocation: Cube[] | null;
-  /** TODO: fouls get their own action. Set in the `foul` dead end. */
-  foul: { attackerId: string; defenderId: string; at: Cube } | null;
+  /**
+   * The resolved foul — both referee checks and the advantage decision. Set in
+   * the `foul` phase; `null` otherwise. The free kick / penalty that follows is
+   * the rules layer's job. See `docs/foul.md`.
+   */
+  foul:
+    | {
+        attackerId: string;
+        defenderId: string;
+        at: Cube;
+        injury: { roll: number; resilience: number; injured: boolean };
+        card: {
+          roll: number;
+          leniency: number;
+          booked: boolean;
+          yellows: number;
+          sentOff: boolean;
+        };
+        /** `null` while awaiting the call; `"stop"` forced when `sentOff`. */
+        decision: FoulDecision | null;
+      }
+    | null;
   /** Who tied and where. Set in the `looseBall` dead end. */
   looseBall: { attackerId: string; defenderId: string; at: Cube } | null;
   /**
@@ -552,6 +626,8 @@ const idleFields = (): Pick<
   | "steal"
   | "outcome"
   | "scatter"
+  | "foulRoll"
+  | "decision"
 > => ({
   phase: "idle",
   activeId: null,
@@ -561,6 +637,8 @@ const idleFields = (): Pick<
   steal: null,
   outcome: null,
   scatter: null,
+  foulRoll: null,
+  decision: null,
 });
 
 /**
@@ -651,11 +729,32 @@ function resolveTackle(snap: MoveActionSnapshot): MoveActionSnapshot {
     rng: roll.rng,
     steal: null,
     outcome,
+    foulRoll: null as FoulRoll | null,
+    decision: null as FoulDecision | null,
   };
 
-  // TODO(foul): a foul is resolved by its own action (free kick / card /
-  // advantage). For now: stop in `foul`, ball unchanged, points already spent.
-  if (foul) return { ...base, state: moved, phase: "foul" };
+  // A foul: the referee's two `d6` checks — injury against the fouled carrier's
+  // resilience, then a card against the referee's leniency. Both always run. A
+  // second yellow forces the stop; otherwise the attacking controller decides
+  // (`foulDecision`). Performing the free kick / penalty is the rules layer's —
+  // see `docs/foul.md`.
+  if (foul) {
+    const fr = resolveFoul(
+      roll.rng,
+      attrOf(snap.state, carrier, "resilience"),
+      defender.yellows ?? 0,
+      snap.state.refereeLeniency ?? 4,
+      snap.state.stealDie ?? 6,
+    );
+    return {
+      ...base,
+      state: applyFoul(moved, outcome, fr),
+      rng: fr.rng,
+      foulRoll: fr,
+      decision: fr.sentOff ? "stop" : null,
+      phase: "foul",
+    };
+  }
 
   // A tie spills the ball: scatter it from the carrier's hex (d6 direction, d6
   // distance) and let the first player on the line catch it. The just-tackled
@@ -717,6 +816,8 @@ export function moveAction(
         steal: null,
         outcome: null,
         scatter: null,
+        foulRoll: null,
+        decision: null,
       };
     }
 
@@ -761,6 +862,8 @@ export function moveAction(
         stepIndex: 0,
         steal: null,
         outcome: null,
+        foulRoll: null,
+        decision: null,
       };
     }
 
@@ -815,6 +918,8 @@ export function moveAction(
             steal: { by: check.by, at: copy(hex), rolls: check.rolls },
             outcome: null,
             scatter: null,
+            foulRoll: null,
+            decision: null,
           };
         }
       }
@@ -835,7 +940,14 @@ export function moveAction(
         steal: null,
         outcome: null,
         scatter: null,
+        foulRoll: null,
+        decision: null,
       };
+    }
+
+    case "foulDecision": {
+      if (snap.phase !== "foul" || snap.decision !== null) return snap;
+      return { ...snap, decision: event.play ? "play" : "stop" };
     }
 
     case "cancel":
@@ -912,6 +1024,31 @@ export function moveView(snap: MoveActionSnapshot): MoveActionView {
     ? { attackerId: o.attackerId, defenderId: o.defenderId, at: o.at }
     : null;
 
+  const fr = snap.foulRoll;
+  const foul: MoveActionView["foul"] =
+    snap.phase === "foul" && o && fr
+      ? {
+          ...marker!,
+          injury: {
+            roll: fr.injuryRoll,
+            resilience: attrOf(
+              snap.state,
+              requirePiece(snap.state, o.attackerId),
+              "resilience",
+            ),
+            injured: fr.injured,
+          },
+          card: {
+            roll: fr.cardRoll,
+            leniency: snap.state.refereeLeniency ?? 4,
+            booked: fr.booked,
+            yellows: fr.yellows,
+            sentOff: fr.sentOff,
+          },
+          decision: snap.decision,
+        }
+      : null;
+
   return {
     phase: snap.phase,
     active,
@@ -931,7 +1068,7 @@ export function moveView(snap: MoveActionSnapshot): MoveActionView {
       snap.phase === "relocating" && o
         ? relocationOptions(snap.state, o)
         : null,
-    foul: snap.phase === "foul" ? marker : null,
+    foul,
     looseBall: snap.phase === "looseBall" ? marker : null,
     scatter:
       snap.phase === "looseBall" && snap.scatter && o

@@ -94,9 +94,10 @@ page; each has a non-empty reachable region; the inline BFS equals
 
 ## Later
 
-The page grew teams, a ball, the steal check, the tackle and loose-ball
-scatter. It is now split into four sections with per-case **seed chips** —
-see `docs/movement-scenarios.md`.
+The page grew teams, a ball, the steal check, the tackle, loose-ball scatter,
+and the **foul** flow (injury + card + the play-on / stop decision — see
+`docs/foul.md`). It is now split into four sections with per-case **seed
+chips** — see `docs/movement-scenarios.md`.
 
 ## Done when
 

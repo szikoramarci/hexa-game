@@ -33,7 +33,11 @@ export interface PlaygroundPiece {
   /** Marks the ball carrier. At most one piece per board. */
   hasBall?: boolean;
   /** Contest attributes; missing ones fall back to `defaultAttr`. */
-  attrs?: { dribbling?: number; tackling?: number };
+  attrs?: { dribbling?: number; tackling?: number; resilience?: number };
+  /** Already carrying a foul injury (`-2` move points). */
+  injured?: boolean;
+  /** Yellow cards already shown — a second booking sends this piece off. */
+  yellows?: number;
 }
 
 /** One board on the movement page. */
@@ -52,6 +56,8 @@ export interface MovementPlayground {
   stealOn?: number;
   /** Attribute value used when a piece omits one. Default 3. */
   defaultAttr?: number;
+  /** Referee strictness, 3..6 — a foul's card d6 at or above it books. Default 4. */
+  refereeLeniency?: number;
 }
 
 /** Which section of the page a case sits under. */
@@ -117,6 +123,7 @@ interface CaseData {
   stealDie: number;
   stealOn: number;
   defaultAttr: number;
+  refereeLeniency: number;
   seed: number;
   seeds: SeedChip[];
   probe: ProbeEvent[];
@@ -126,7 +133,9 @@ interface CaseData {
     label: string;
     movePoints: number;
     team: string;
-    attrs: { dribbling?: number; tackling?: number };
+    attrs: { dribbling?: number; tackling?: number; resilience?: number };
+    injured: boolean;
+    yellows: number;
   }[];
 }
 
@@ -186,6 +195,8 @@ function renderCase(
     color: teamColor(piece.team),
     hasBall: piece.hasBall === true,
     attrs: piece.attrs ?? {},
+    injured: piece.injured === true,
+    yellows: piece.yellows ?? 0,
   }));
 
   const carrier = pieces.find((piece) => piece.hasBall) ?? null;
@@ -223,17 +234,22 @@ function renderCase(
     stealDie: p.stealDie ?? 6,
     stealOn: p.stealOn ?? 1,
     defaultAttr: p.defaultAttr ?? 3,
+    refereeLeniency: p.refereeLeniency ?? 4,
     seed: seeds[0]?.seed ?? seedRng(`${id}`),
     seeds,
     probe,
-    pieces: pieces.map(({ id: pid, at, label, movePoints, team, attrs }) => ({
-      id: pid,
-      at,
-      label,
-      movePoints,
-      team,
-      attrs,
-    })),
+    pieces: pieces.map(
+      ({ id: pid, at, label, movePoints, team, attrs, injured, yellows }) => ({
+        id: pid,
+        at,
+        label,
+        movePoints,
+        team,
+        attrs,
+        injured,
+        yellows,
+      }),
+    ),
   };
 
   const chipEls = seeds
@@ -264,6 +280,8 @@ function renderCase(
     chipRow +
     `      <div class="hud"><div class="hud-row"><span class="status"></span>` +
     `<span class="hud-btns"><button class="stay" type="button" hidden>stay</button>` +
+    `<button class="adv" type="button" data-play="1" hidden>play on</button>` +
+    `<button class="adv" type="button" data-play="0" hidden>stop — set piece</button>` +
     shuffleBtn +
     `<button class="reset" type="button">reset</button></span></div>` +
     `<p class="log" hidden></p></div>\n` +
@@ -323,7 +341,10 @@ const CASES_CSS = `
   .hud .status.stolen { color: ${COLOR.danger}; font-weight: 700; }
   .hud .status.won { color: #1560c4; font-weight: 700; }
   .hud-btns { display: flex; gap: .4rem; flex: none; }
-  .reset, .stay, .shuffle { font: inherit; padding: .1rem .55rem; cursor: pointer; }
+  .reset, .stay, .shuffle, .adv { font: inherit; padding: .1rem .55rem; cursor: pointer; }
+  .hud .status.booked { color: #b8860b; font-weight: 700; }
+  .piece.injured { filter: drop-shadow(0 0 3px #d97706) drop-shadow(0 0 3px #d97706); }
+  .piece.carded .marker { outline: 2px solid #f5c518; }
   .log { margin: .45rem 0 0; padding: .35rem .5rem; border-radius: 5px;
     background: #f1f1f1; color: #444; font-size: .78rem; line-height: 1.4; }
   .log.win { background: #e6effb; color: #14458c; }
@@ -340,7 +361,10 @@ const CASES_CSS = `
  * It also mirrors the **tackle**: a selected defender that can reach the enemy
  * carrier's hex clicks it to lunge (`tackling`), spends all its move points, and
  * a `d6 + tackling` vs `d6 + dribbling` challenge (`resolveChallenge`) decides
- * the ball. A defender `1` is a foul (dead end, TODO); equal scores a loose
+ * the ball. A defender `1` is a foul — `resolveFoul` rolls a d6 injury check
+ * against the carrier's resilience and a d6 card check against the referee's
+ * leniency, then the attacking side picks `foulDecision` play-on / stop (the
+ * set piece itself is still TODO). Equal scores a loose
  * ball — `looseBall` scatters it (d6 direction, d6 distance) from the carrier's
  * hex and the first player on the line catches it. The winner's controller then
  * clicks a green hex to `relocate` the carrying piece, or `stay` for the
@@ -395,6 +419,14 @@ const SCRIPT = [
   "  return { directionRoll: a[0], distanceRoll: d[0], direction: dir, route: route,",
   "           rest: route[route.length - 1], caughtBy: caughtBy, rng: d[1] };",
   "}",
+  "// referee's response to a foul, mirrors src/foul: d6 injury then d6 card",
+  "function resolveFoul(s, resilience, foulerYellows, leniency, die) {",
+  "  var inj = rollDie(s, die || 6), card = rollDie(inj[1], die || 6);",
+  "  var booked = card[0] >= leniency;",
+  "  var yellows = foulerYellows + (booked ? 1 : 0);",
+  "  return { injuryRoll: inj[0], injured: inj[0] >= resilience, cardRoll: card[0],",
+  "           booked: booked, yellows: yellows, sentOff: yellows >= 2, rng: card[1] };",
+  "}",
   "",
   "function initCase(section, DATA) {",
   "  var SIZE = DATA.size;",
@@ -406,6 +438,7 @@ const SCRIPT = [
   "  var statusEl = section.querySelector('.status');",
   "  var logEl = section.querySelector('.log');",
   "  var stayBtn = section.querySelector('.stay');",
+  "  var advBtns = [].slice.call(section.querySelectorAll('.adv'));",
   "  var hexEls = new Map();",
   "  svg.querySelectorAll('.hex').forEach(function (el) { hexEls.set(el.dataset.key, el); });",
   "  var pieceEls = new Map();",
@@ -419,7 +452,9 @@ const SCRIPT = [
   "  // --- game state (mirrors MoveActionState) ---",
   "  var pieces = DATA.pieces.map(function (p) {",
   "    return { id: p.id, at: p.at, label: p.label, movePoints: p.movePoints,",
-  "             team: p.team, attrs: p.attrs || {}, home: p.at, homeMP: p.movePoints };",
+  "             team: p.team, attrs: p.attrs || {}, injured: !!p.injured, yellows: p.yellows || 0,",
+  "             sentOff: false, home: p.at, homeMP: p.movePoints,",
+  "             homeInjured: !!p.injured, homeYellows: p.yellows || 0 };",
   "  });",
   "  var ball = DATA.ball;",
   "  var rng = DATA.seed | 0;",
@@ -516,7 +551,7 @@ const SCRIPT = [
   "  }",
   "",
   "  // --- snapshot (mirrors MoveActionSnapshot) ---",
-  "  function idle() { return { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0, steal: null, outcome: null }; }",
+  "  function idle() { return { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0, steal: null, outcome: null, foulRoll: null, decision: null }; }",
   "  var snap = idle();",
   "  var tree = null;",
   "  function aimingPhase(p) { return p.movePoints > 0 ? 'aiming' : 'spent'; }",
@@ -535,8 +570,17 @@ const SCRIPT = [
   "    lastChallenge = { kind: 'tackle', roll: roll, foul: foul, winner: outcome.winner,",
   "      defLabel: def.label, attLabel: carrier.label,",
   "      defAttr: attrOf(def, 'tackling'), attAttr: attrOf(carrier, 'dribbling') };",
-  "    var base = { activeId: def.id, target: null, path: [], stepIndex: 0, steal: null, outcome: outcome };",
-  "    if (foul) { snap = Object.assign({ phase: 'foul' }, base); return; }",
+  "    var base = { activeId: def.id, target: null, path: [], stepIndex: 0, steal: null, outcome: outcome, foulRoll: null, decision: null };",
+  "    if (foul) {",
+  "      var fr = resolveFoul(rng, attrOf(carrier, 'resilience'), def.yellows, DATA.refereeLeniency, DATA.stealDie);",
+  "      rng = fr.rng;",
+  "      if (fr.injured && !carrier.injured) { carrier.injured = true; carrier.movePoints = Math.max(0, carrier.movePoints - 2); }",
+  "      if (fr.booked) { def.yellows = fr.yellows; def.sentOff = fr.sentOff; }",
+  "      lastChallenge.foulRoll = fr;",
+  "      lastChallenge.resilience = attrOf(carrier, 'resilience');",
+  "      snap = Object.assign({ phase: 'foul', foulRoll: fr, decision: fr.sentOff ? 'stop' : null }, base);",
+  "      return;",
+  "    }",
   "    if (roll.tie) {",
   "      var stoppers = pieces.map(function (p) { return { id: p.id, at: p.at }; });",
   "      var scatter = looseBall(rng, at, stoppers, DATA.stealDie);",
@@ -627,6 +671,9 @@ const SCRIPT = [
   "      if (wasCarrier) ball = ap.at;",
   "      snap = { phase: aimingPhase(ap), activeId: ap.id, target: null, path: [], stepIndex: 0, steal: null, outcome: null };",
   "      tree = flood(ap.id);",
+  "    } else if (ev.type === 'foulDecision') {",
+  "      if (snap.phase !== 'foul' || snap.decision != null) return;",
+  "      snap.decision = ev.play ? 'play' : 'stop';",
   "    } else if (ev.type === 'cancel') {",
   "      if (snap.phase === 'moving' || snap.phase === 'tackling') return;",
   "      if (snap.phase === 'relocating' && snap.outcome) {",
@@ -692,7 +739,14 @@ const SCRIPT = [
   "    var r = c.roll;",
   "    var dice2 = 'd6 ' + r.defenderRoll + '+' + c.defAttr + ' tackling  vs  d6 ' + r.attackerRoll + '+' +",
   "      c.attAttr + ' dribbling  \\u2192  ' + r.defenderScore + '\\u2013' + r.attackerScore;",
-  "    if (c.foul) return { cls: 'steal', text: 'foul \\u2014 defender rolled 1  \\u00b7  ' + dice2 + '  (TODO)' };",
+  "    if (c.foul) {",
+  "      var fr = c.foulRoll;",
+  "      var inj = 'd6 ' + fr.injuryRoll + ' vs resilience ' + c.resilience + '  \\u2192  ' + (fr.injured ? 'injured (-2 MP)' : 'unhurt');",
+  "      var crd = 'd6 ' + fr.cardRoll + ' vs leniency ' + DATA.refereeLeniency + '  \\u2192  ' +",
+  "        (fr.sentOff ? 'SENT OFF (2nd yellow)' : fr.booked ? 'yellow (' + fr.yellows + ')' : 'no card');",
+  "      return { cls: 'steal', text: 'foul \\u2014 defender rolled 1  \\u00b7  ' + dice2 +",
+  "        '  \\u00b7  ' + inj + '  \\u00b7  ' + crd };",
+  "    }",
   "    if (c.winner === null) {",
   "      var s = c.scatter, tail = '';",
   "      if (s) {",
@@ -733,6 +787,8 @@ const SCRIPT = [
   "      el.classList.toggle('robbed', (snap.steal != null && p.id === snap.activeId) || (snap.phase === 'foul' && snap.outcome && p.id === snap.outcome.defenderId));",
   "      el.classList.toggle('tackle-target', tk != null && p.id === tk.carrierId);",
   "      el.classList.toggle('caught', snap.phase === 'looseBall' && snap.scatter != null && snap.scatter.caughtBy === p.id && !ballRollKey);",
+  "      el.classList.toggle('injured', !!p.injured);",
+  "      el.classList.toggle('carded', p.yellows > 0 || !!p.sentOff);",
   "    });",
   "    if (ballEl) {",
   "      var bkey = ball;",
@@ -755,14 +811,25 @@ const SCRIPT = [
   "    else if (snap.phase === 'looseBall' && snap.scatter) drawArrow(snap.scatter.route, SCATTER);",
   "    else if (tk && snap.path.length < 2) drawArrow(tk.path, DANGER);",
   "    else drawArrow(snap.path, hazards.size > 0 ? DANGER : ARROW);",
-  "    statusEl.classList.toggle('stolen', snap.phase === 'stopped' || snap.phase === 'foul' || snap.phase === 'looseBall');",
+  "    statusEl.classList.toggle('stolen', snap.phase === 'stopped' || snap.phase === 'looseBall' || (snap.phase === 'foul' && (!snap.foulRoll || !snap.foulRoll.booked)));",
+  "    statusEl.classList.toggle('booked', snap.phase === 'foul' && !!snap.foulRoll && snap.foulRoll.booked);",
   "    statusEl.classList.toggle('won', snap.phase === 'relocating');",
   "    stayBtn.hidden = snap.phase !== 'relocating';",
+  "    var awaitDecision = snap.phase === 'foul' && snap.foulRoll && !snap.foulRoll.sentOff && snap.decision == null;",
+  "    advBtns.forEach(function (b) { b.hidden = !awaitDecision; });",
   "    if (snap.steal) {",
   "      var thief = piece(snap.steal.by);",
   "      statusEl.textContent = 'successful ball-steal \\u2014 ball to ' + thief.label;",
   "    } else if (snap.phase === 'foul') {",
-  "      statusEl.textContent = 'foul \\u2014 defender rolled 1 (TODO)';",
+  "      var fr = snap.foulRoll || {};",
+  "      var off = piece(snap.outcome.defenderId), vic = piece(snap.outcome.attackerId);",
+  "      var card = fr.sentOff ? off.label + ' sent off (2nd yellow)' : fr.booked ? off.label + ' booked' : 'no card';",
+  "      var hurt = fr.injured ? vic.label + ' injured' : vic.label + ' unhurt';",
+  "      var tail = fr.sentOff ? ' \\u2014 game stopped, set piece'",
+  "        : snap.decision === 'play' ? ' \\u2014 advantage played (TODO)'",
+  "        : snap.decision === 'stop' ? ' \\u2014 set piece (TODO)'",
+  "        : ' \\u2014 play on or stop?';",
+  "      statusEl.textContent = 'foul \\u2014 ' + hurt + ', ' + card + tail;",
   "    } else if (snap.phase === 'looseBall') {",
   "      var sc = snap.scatter;",
   "      statusEl.textContent = !sc ? 'loose ball \\u2014 scores level'",
@@ -814,7 +881,10 @@ const SCRIPT = [
   "",
   "  // Restore the board to its start and reseed. Shared by reset / shuffle / chips.",
   "  function restore(seed) {",
-  "    pieces.forEach(function (p) { p.at = p.home; p.movePoints = p.homeMP; });",
+  "    pieces.forEach(function (p) {",
+  "      p.at = p.home; p.movePoints = p.homeMP;",
+  "      p.injured = p.homeInjured; p.yellows = p.homeYellows; p.sentOff = false;",
+  "    });",
   "    ball = DATA.ball;",
   "    rng = seed | 0; curSeed = seed | 0;",
   "    snap = idle(); tree = null; lastChallenge = null; ballRollKey = null;",
@@ -859,6 +929,11 @@ const SCRIPT = [
   "    });",
   "  });",
   "  stayBtn.addEventListener('click', function () { dispatch({ type: 'cancel' }); render(); });",
+  "  advBtns.forEach(function (b) {",
+  "    b.addEventListener('click', function () {",
+  "      dispatch({ type: 'foulDecision', play: b.dataset.play === '1' }); render();",
+  "    });",
+  "  });",
   "  var chipEls = [].slice.call(section.querySelectorAll('.chip'));",
   "  function clearChips() { chipEls.forEach(function (b) { b.classList.remove('on'); }); }",
   "  chipEls.forEach(function (btn) {",
@@ -938,7 +1013,11 @@ export function writeMovementPlayground(
     `enemy carrier (glowing red) clicks it to <strong>tackle</strong>: it spends ` +
     `all its move points and a d6 + tackling vs d6 + dribbling challenge decides ` +
     `the ball. The winner clicks a green hex to reposition, or <strong>stay</strong>. ` +
-    `A defender 1 is a foul (still TODO); level scores <strong>spill the ball</strong> — ` +
+    `A defender 1 is a <strong>foul</strong>: a d6 injury check against the carrier's ` +
+    `resilience (a hit costs 2 move points) and a d6 card check against the referee's ` +
+    `leniency (a 2nd yellow is a red — game stopped). Then the attacking side picks ` +
+    `<strong>play on</strong> or <strong>stop</strong> for the set piece (both still TODO). ` +
+    `Level scores <strong>spill the ball</strong> — ` +
     `a d6 direction and a d6 distance roll it in a straight line (slate arrow) until a ` +
     `player on the line pounces on it, else it sits loose where it stops. ` +
     `Every challenge logs its dice and a plain result under the board — ` +

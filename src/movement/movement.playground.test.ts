@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cube, cubeKey, type Cube } from "../coordinates/coordinates.js";
 import { seedRng } from "../dice/dice.js";
+import { resolveFoul } from "../foul/foul.js";
 import { looseBall } from "../loose-ball/loose-ball.js";
 import {
   initMoveAction,
@@ -44,9 +45,14 @@ type Outcome =
   | "steal"
   | "tackle-won"
   | "tackle-lost"
-  | "foul"
+  | "foul-unhurt"
+  | "foul-injured"
+  | "foul-sent-off"
   | "lb-caught"
   | "lb-clear";
+
+/** Any of the three foul results — for cases that just want "a foul". */
+const ANY_FOUL: Outcome[] = ["foul-unhurt", "foul-injured", "foul-sent-off"];
 
 /** A case plus the seed chips it wants surfaced (resolved into `seeds` below). */
 interface CaseDraft extends MovementCase {
@@ -61,7 +67,7 @@ const TACKLE: ProbeEvent = { t: "tackle" };
 const TACKLE_WANT = [
   { label: "tackle won", outcome: "tackle-won" as const },
   { label: "tackle lost", outcome: "tackle-lost" as const },
-  { label: "foul", outcome: "foul" as const },
+  { label: "foul", outcome: ANY_FOUL },
   { label: "loose ball", outcome: ["lb-caught", "lb-clear"] as Outcome[] },
 ];
 
@@ -187,7 +193,7 @@ const DRAFTS: CaseDraft[] = [
     probe: [SELECT_P0, TACKLE],
     want: [
       { label: "tackle lost", outcome: "tackle-lost" },
-      { label: "foul", outcome: "foul" },
+      { label: "foul", outcome: ANY_FOUL },
       { label: "loose ball", outcome: ["lb-caught", "lb-clear"] },
     ],
     play: {
@@ -208,6 +214,38 @@ const DRAFTS: CaseDraft[] = [
       pieces: [
         { at: cube(1, -1, 0), label: "D", movePoints: 2, team: AWAY },
         { at: origin, label: 9, movePoints: 0, team: HOME, hasBall: true },
+      ],
+    },
+  },
+  {
+    title: "reckless challenge — a foul that can end the game",
+    group: "tackle",
+    probe: [SELECT_P0, TACKLE],
+    want: [
+      { label: "foul · unhurt", outcome: "foul-unhurt" },
+      { label: "foul · injured", outcome: "foul-injured" },
+      { label: "foul · sent off", outcome: "foul-sent-off" },
+    ],
+    play: {
+      radius: 4,
+      refereeLeniency: 4,
+      pieces: [
+        {
+          at: cube(2, -2, 0),
+          label: "D",
+          movePoints: 3,
+          team: AWAY,
+          yellows: 1,
+          attrs: { tackling: 2 },
+        },
+        {
+          at: origin,
+          label: 9,
+          movePoints: 5,
+          team: HOME,
+          hasBall: true,
+          attrs: { dribbling: 3, resilience: 2 },
+        },
       ],
     },
   },
@@ -242,6 +280,8 @@ function caseState(c: MovementCase): MoveActionState {
     movePoints: p.movePoints,
     team: p.team,
     ...(p.attrs ? { attrs: p.attrs } : {}),
+    ...(p.injured ? { injured: true } : {}),
+    ...(p.yellows != null ? { yellows: p.yellows } : {}),
   }));
   const carrier = c.play.pieces.findIndex((p) => p.hasBall);
   const state: MoveActionState = {
@@ -249,6 +289,9 @@ function caseState(c: MovementCase): MoveActionState {
     obstacles: [...(c.play.obstacle ?? [])],
     piecesBlock: c.play.piecesBlock,
     ...(c.play.defaultAttr != null ? { defaultAttr: c.play.defaultAttr } : {}),
+    ...(c.play.refereeLeniency != null
+      ? { refereeLeniency: c.play.refereeLeniency }
+      : {}),
   };
   return carrier >= 0 ? { ...state, ball: pieces[carrier]!.at } : state;
 }
@@ -284,7 +327,10 @@ function playProbe(
 /** Bucket a terminal snapshot into one {@link Outcome}. */
 function classify(s: MoveActionSnapshot): Outcome {
   if (s.phase === "stopped" && s.steal) return "steal";
-  if (s.phase === "foul") return "foul";
+  if (s.phase === "foul") {
+    if (s.foulRoll?.sentOff) return "foul-sent-off";
+    return s.foulRoll?.injured ? "foul-injured" : "foul-unhurt";
+  }
   if (s.phase === "looseBall") return s.scatter?.caughtBy ? "lb-caught" : "lb-clear";
   if (s.outcome?.winner === "defender") return "tackle-won";
   if (s.outcome?.winner === "attacker") return "tackle-lost";
@@ -511,6 +557,7 @@ describe("movement playground page — the tackle", () => {
       "close down the carrier — a hard tackle",
       "the carrier rides the challenge",
       "shoulder to shoulder — even attributes",
+      "reckless challenge — a foul that can end the game",
       "loose ball in a crowd — a tie spills it",
     ]) {
       const c = CASES[idx(title)]!;
@@ -543,6 +590,39 @@ describe("movement playground page — the tackle", () => {
       );
       expect(view.scatter!.route).toEqual(direct.route);
       expect(s.state.ball).toEqual(direct.rest);
+    }
+  });
+
+  it("ships the foul flow — resolveFoul mirror, advantage buttons, injury glow", () => {
+    expect(html).toContain("function resolveFoul(");
+    expect(html).toContain('class="adv"');
+    expect(html).toContain(".piece.injured");
+    expect(html).toContain("vs resilience");
+    expect(html).toContain("SENT OFF");
+  });
+
+  it("the reckless-challenge chip seeds each land their labelled foul result", () => {
+    const c = CASES[idx("reckless challenge — a foul that can end the game")]!;
+    const state = caseState(c);
+    const labels = c.seeds!.map((s) => s.label);
+    expect(labels).toEqual(["foul · unhurt", "foul · injured", "foul · sent off"]);
+
+    for (const chip of c.seeds!) {
+      const s = playProbe(state, chip.seed, c.probe!);
+      expect(s.phase).toBe("foul");
+      // the snapshot's foulRoll matches a direct resolveFoul off the challenge rng
+      const direct = resolveFoul(s.outcome!.roll.rng, 2, 1, 4);
+      expect(s.foulRoll).toEqual(direct);
+
+      const carrier = s.state.pieces.find((p) => p.id === "case-p1")!;
+      const fouler = s.state.pieces.find((p) => p.id === "case-p0")!;
+      expect(carrier.injured ?? false).toBe(direct.injured);
+      expect(carrier.movePoints).toBe(direct.injured ? 3 : 5);
+      if (direct.booked) expect(fouler.yellows).toBe(direct.yellows);
+      if (chip.label === "foul · sent off") {
+        expect(fouler.sentOff).toBe(true);
+        expect(s.decision).toBe("stop");
+      }
     }
   });
 });

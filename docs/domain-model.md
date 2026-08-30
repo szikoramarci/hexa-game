@@ -37,7 +37,10 @@ Notes:
 - `saving` (GK) is contested against `shooting`.
 - `tackling` also applies to a goalkeeper **when outside their penalty area**.
 - `high pass` = making an accurate lofted pass (offense only for now).
-- `resilience` = injury resistance. Injury system deferred.
+- `resilience` = injury resistance. A foul rolls `d6` vs `resilience`; `>=` and
+  the player is `injured` — `-2` move points, and it sticks. See `docs/foul.md`.
+- `pace` is the piece's `movePoints` (the per-turn travel budget), not a
+  separate stat.
 
 ### Teams
 
@@ -100,8 +103,26 @@ The existing `move-action` ball-steal (`d6 <= stealOn`) is a simpler
 placeholder; it will fold into this model.
 
 The tackle challenge is implemented — `resolveChallenge` (generic `d6 + attr`)
-plus the defender lunge, in `move-action`. See `docs/tackle-action.md`. A foul
-is still a `TODO` dead end; a tie now scatters the ball (below).
+plus the defender lunge, in `move-action`. See `docs/tackle-action.md`. A tie
+scatters the ball (below); a foul runs the referee checks (below).
+
+### Foul
+
+The defender's raw challenge `d6` of `1` is a foul: the comparison is void, the
+carrier keeps the ball, and the referee steps in with two `d6` checks (always
+both):
+
+- **injury** — `d6 >= carrier.resilience` → the carrier is `injured` (`-2` move
+  points, persists).
+- **card** — `d6 >= refereeLeniency` → a yellow for the fouler; his second is a
+  red (`sentOff`), which stops the game.
+
+`refereeLeniency` is a global on `MoveActionState`, `3..6`, rolled once at
+kick-off (default `4`). After the checks the attacking controller picks
+`play` on (advantage) or `stop` for the set piece — both still TODO, as is
+performing the free kick / penalty. Implemented as `resolveFoul` in `src/foul/`
+plus `applyFoul` / the `foulDecision` event in `move-action`. See
+`docs/foul.md`.
 
 ### Loose ball scatter
 
@@ -128,6 +149,7 @@ carries it from there.
 
 ## Deferred
 
-Injury system · relative field tags decision · full challenge catalogue ·
-set-piece rules (throw-in, corner, goal kick, penalty) · offside · the rules
-layer itself.
+Relative field tags decision · full challenge catalogue · set-piece rules
+(throw-in, corner, goal kick, penalty — including the free kick / penalty a foul
+leads to) · advantage / play-on · turn model (refreshing `movePoints` from pace,
+re-applying the injury `-2`) · offside · the rules layer itself.

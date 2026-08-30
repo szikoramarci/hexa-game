@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { cube, cubeEquals, cubeKey, type Cube } from "../coordinates/coordinates.js";
 import { rollDie, seedRng } from "../dice/dice.js";
+import { resolveFoul, tackleFoul, type FoulRoll } from "../foul/foul.js";
 import { looseBall } from "../loose-ball/loose-ball.js";
 import { reachableCubes } from "../movement/movement.js";
 import {
+  applyFoul,
   applyMove,
   applyTackle,
   ballCarrier,
@@ -20,7 +22,6 @@ import {
   reachTackle,
   relocationOptions,
   resolveChallenge,
-  tackleFoul,
   tackleTarget,
   type ChallengeRoll,
   type MoveActionSnapshot,
@@ -472,6 +473,31 @@ const ATTACKER_WINS = seedFor((r) => r.winner === "attacker" && r.defenderRoll !
 const FOUL = seedFor((r) => r.defenderRoll === 1);
 const TIE = seedFor((r) => r.tie && r.defenderRoll !== 1);
 
+/** First seed: a 3-v-3 challenge foul whose {@link resolveFoul} matches `pred`. */
+function seedForFoul(
+  pred: (fr: FoulRoll) => boolean,
+  foulerYellows = 0,
+  resilience = 3,
+  leniency = 4,
+): number {
+  for (let s = 1; s < 200_000; s++) {
+    const rr = resolveChallenge(seedRng(s), 3, 3);
+    if (rr.defenderRoll !== 1) continue;
+    if (pred(resolveFoul(rr.rng, resilience, foulerYellows, leniency))) return s;
+  }
+  throw new Error("no foul seed matches");
+}
+
+const FOUL_INJURED = seedForFoul((fr) => fr.injured && !fr.booked);
+const FOUL_UNHURT = seedForFoul((fr) => !fr.injured && !fr.booked);
+const FOUL_BOOKED = seedForFoul((fr) => fr.booked && !fr.sentOff && !fr.injured);
+const FOUL_SECOND_YELLOW = seedForFoul((fr) => fr.booked, 1);
+
+/** The `FoulRoll` a foul seed produces off a 3-v-3 challenge. */
+function foulRollFor(seed: number, yellows = 0, resilience = 3, leniency = 4): FoulRoll {
+  return resolveFoul(resolveChallenge(seedRng(seed), 3, 3).rng, resilience, yellows, leniency);
+}
+
 function commitTackle(seed: number, over?: Partial<MoveActionState>): MoveActionSnapshot {
   let s = initMoveAction(tackleScene(over), seed);
   s = moveAction(s, { type: "selectPiece", pieceId: "def" });
@@ -693,14 +719,79 @@ describe("moveAction reducer — the tackle", () => {
     expect(pieceAt(done, "att").at).toEqual(origin);
   });
 
-  it("a defender 1 is a foul — dead end, ball untouched (TODO)", () => {
+  it("a defender 1 is a foul — ball untouched, both referee checks resolved", () => {
     const s = commitTackle(FOUL);
     expect(s.phase).toBe("foul");
-    expect(moveView(s).foul).toMatchObject({ attackerId: "att", defenderId: "def", at: origin });
-    expect(s.state.ball).toEqual(origin); // unchanged
+    expect(s.state.ball).toEqual(origin); // carrier keeps it
     expect(pieceAt(s, "def").movePoints).toBe(0);
-    // leave it
+    expect(s.foulRoll).toEqual(foulRollFor(FOUL));
+
+    const view = moveView(s).foul!;
+    expect(view).toMatchObject({ attackerId: "att", defenderId: "def", at: origin });
+    expect(view.injury).toMatchObject({ roll: s.foulRoll!.injuryRoll, resilience: 3 });
+    expect(view.card).toMatchObject({ roll: s.foulRoll!.cardRoll, leniency: 4 });
+
+    // selectPiece / cancel still leave the dead end
     expect(moveAction(s, { type: "selectPiece", pieceId: "att" }).phase).toBe("spent");
+    expect(moveAction(commitTackle(FOUL), { type: "cancel" }).phase).toBe("idle");
+  });
+
+  it("refereeLeniency defaults to 4 when the state omits it", () => {
+    expect(moveView(commitTackle(FOUL)).foul!.card.leniency).toBe(4);
+    const strict = commitTackle(FOUL, { refereeLeniency: 3 });
+    expect(moveView(strict).foul!.card.leniency).toBe(3);
+  });
+
+  it("an injured carrier picks up the tag and loses 2 move points", () => {
+    const withMp = () => [
+      piece({ id: "att", at: origin, team: "home", movePoints: 5 }),
+      piece({ id: "def", at: cube(2, -2, 0), team: "away", movePoints: 3 }),
+    ];
+    const hurt = commitTackle(FOUL_INJURED, { pieces: withMp() });
+    expect(pieceAt(hurt, "att").injured).toBe(true);
+    expect(pieceAt(hurt, "att").movePoints).toBe(3);
+
+    const ok = commitTackle(FOUL_UNHURT, { pieces: withMp() });
+    expect(pieceAt(ok, "att").injured).toBeUndefined();
+    expect(pieceAt(ok, "att").movePoints).toBe(5);
+  });
+
+  it("a booking bumps the fouler's yellow count; a second is a red", () => {
+    const booked = commitTackle(FOUL_BOOKED);
+    expect(pieceAt(booked, "def").yellows).toBe(1);
+    expect(pieceAt(booked, "def").sentOff).toBeFalsy();
+    expect(booked.decision).toBeNull();
+
+    const carded = () => [
+      piece({ id: "att", at: origin, team: "home", movePoints: 0 }),
+      piece({ id: "def", at: cube(2, -2, 0), team: "away", movePoints: 3, yellows: 1 }),
+    ];
+    const off = commitTackle(FOUL_SECOND_YELLOW, { pieces: carded() });
+    expect(pieceAt(off, "def").yellows).toBe(2);
+    expect(pieceAt(off, "def").sentOff).toBe(true);
+    expect(off.decision).toBe("stop"); // forced, no advantage
+    expect(moveView(off).foul!.card.sentOff).toBe(true);
+    expect(moveAction(off, { type: "foulDecision", play: true }).decision).toBe("stop");
+  });
+
+  it("the attacking controller picks advantage or the set piece", () => {
+    const play = moveAction(commitTackle(FOUL_UNHURT), { type: "foulDecision", play: true });
+    expect(play.phase).toBe("foul");
+    expect(play.decision).toBe("play");
+    expect(moveView(play).foul!.decision).toBe("play");
+
+    const stop = moveAction(commitTackle(FOUL_UNHURT), { type: "foulDecision", play: false });
+    expect(stop.decision).toBe("stop");
+
+    // a second call is ignored
+    expect(moveAction(play, { type: "foulDecision", play: false }).decision).toBe("play");
+  });
+
+  it("replays a foul from a fixed seed", () => {
+    const a = commitTackle(FOUL_INJURED);
+    const b = commitTackle(FOUL_INJURED);
+    expect(a.foulRoll).toEqual(b.foulRoll);
+    expect(a.state.pieces).toEqual(b.state.pieces);
   });
 
   it("a tie scatters the ball from the carrier's hex", () => {
@@ -799,5 +890,39 @@ describe("applyTackle", () => {
   it("relocationOptions is empty on a foul", () => {
     const s = commitTackle(FOUL);
     expect(relocationOptions(s.state, s.outcome!)).toEqual([]);
+  });
+});
+
+describe("applyFoul", () => {
+  const scene = () =>
+    tackleScene({
+      pieces: [
+        piece({ id: "att", at: origin, team: "home", movePoints: 5 }),
+        piece({ id: "def", at: cube(2, -2, 0), team: "away", movePoints: 3 }),
+      ],
+    });
+  const outcome = () => commitTackle(FOUL, { pieces: scene().pieces }).outcome!;
+
+  it("injures the carrier once — a second foul does not dock again", () => {
+    const o = outcome();
+    const hurt = applyFoul(scene(), o, foulRollFor(FOUL_INJURED));
+    const att = hurt.pieces.find((p) => p.id === "att")!;
+    expect(att.injured).toBe(true);
+    expect(att.movePoints).toBe(3);
+
+    const again = applyFoul(hurt, o, foulRollFor(FOUL_INJURED));
+    expect(again.pieces.find((p) => p.id === "att")!.movePoints).toBe(3);
+  });
+
+  it("books the fouler only when the roll says so, and never mutates the input", () => {
+    const s = scene();
+    const frozen = structuredClone(s);
+    const booked = applyFoul(s, outcome(), foulRollFor(FOUL_BOOKED));
+    expect(booked.pieces.find((p) => p.id === "def")!.yellows).toBe(1);
+    expect(s).toEqual(frozen);
+
+    const clean = applyFoul(s, outcome(), foulRollFor(FOUL_UNHURT));
+    expect(clean.pieces.find((p) => p.id === "def")!.yellows).toBeUndefined();
+    expect(clean.ball).toEqual(origin);
   });
 });

@@ -23,7 +23,7 @@ Defender = active piece, `aiming`, enemy ball carrier on the board.
 | cost | committing a tackle spends **all** remaining move points, whatever the result |
 | lunge | defender walks the approach, resting on the last hex before the carrier (`approachEnd`); the final step onto the carrier hex is the contest, defender never occupies it |
 | challenge | `d6 + defender.tackling` vs `d6 + attacker.dribbling` |
-| foul | defender's raw `d6` is `1` → **foul**, overrides the comparison — TODO, handled separately |
+| foul | defender's raw `d6` is `1` → **foul**, overrides the comparison — resolved by `resolveFoul` (injury + card). See `docs/foul.md` |
 | tie | equal final scores → **loose ball** — TODO, handled later |
 | defender wins | defender takes the ball; controller relocates the defender to any **free neighbour of the attacker**; cancel → defender returns to `tackleStart` (its hex when the tackle was committed) |
 | attacker wins | attacker keeps the ball; controller relocates the attacker to any **free hex around the defender** (`approachEnd`); cancel → attacker stays put |
@@ -105,7 +105,9 @@ animates a lunge, not a walk.
 
 ## TODOs to leave in code
 
-- `// TODO(foul): a foul is resolved by its own action — free kick / card / advantage. For now: phase "foul", ball unchanged, defender's MP already spent.`
+- ~~foul TODO~~ — **done**: the foul branch now runs `resolveFoul` (injury +
+  card), `applyFoul`, and the `foulDecision` advantage call. Performing the free
+  kick / penalty is still the rules layer's. See `docs/foul.md`.
 - ~~loose-ball TODO~~ — **done**: the tie branch now calls `looseBall` and
   scatters the ball. See `docs/loose-ball.md`.
 
