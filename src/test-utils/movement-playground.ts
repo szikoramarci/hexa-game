@@ -200,9 +200,10 @@ function renderCase(
     pieceEls +
     ballEl +
     `\n      </svg>\n` +
-    `      <div class="hud"><span class="status"></span>` +
+    `      <div class="hud"><div class="hud-row"><span class="status"></span>` +
     `<span class="hud-btns"><button class="stay" type="button" hidden>stay</button>` +
-    `<button class="reset" type="button">reset</button></span></div>\n` +
+    `<button class="reset" type="button">reset</button></span></div>` +
+    `<p class="log" hidden></p></div>\n` +
     `    </section>`;
 
   return { section, data };
@@ -239,12 +240,17 @@ const CASES_CSS = `
   @keyframes robbed { 0%,100% { transform: translate(0,0) }
     30% { transform: translate(-2px,0) } 70% { transform: translate(2px,0) } }
   .ball { pointer-events: none; transition: transform ${STEP_MS}ms linear; }
-  .hud { display: flex; align-items: center; justify-content: space-between;
-    gap: .75rem; margin-top: .5rem; font-size: .8rem; color: #666; }
+  .hud { margin-top: .5rem; font-size: .8rem; color: #666; }
+  .hud-row { display: flex; align-items: center; justify-content: space-between;
+    gap: .75rem; }
   .hud .status.stolen { color: ${COLOR.danger}; font-weight: 700; }
   .hud .status.won { color: #1560c4; font-weight: 700; }
   .hud-btns { display: flex; gap: .4rem; flex: none; }
-  .reset, .stay { font: inherit; padding: .1rem .55rem; cursor: pointer; }`;
+  .reset, .stay { font: inherit; padding: .1rem .55rem; cursor: pointer; }
+  .log { margin: .45rem 0 0; padding: .35rem .5rem; border-radius: 5px;
+    background: #f1f1f1; color: #444; font-size: .78rem; line-height: 1.4; }
+  .log.win { background: #e6effb; color: #14458c; }
+  .log.steal { background: #fbe6e6; color: #a11; }`;
 
 /**
  * The live layer, once per page. `initCase(section, DATA)` mirrors
@@ -302,6 +308,7 @@ const SCRIPT = [
   "  var arrowLayer = svg.querySelector('.arrow-layer');",
   "  var ballEl = svg.querySelector('.ball');",
   "  var statusEl = section.querySelector('.status');",
+  "  var logEl = section.querySelector('.log');",
   "  var stayBtn = section.querySelector('.stay');",
   "  var hexEls = new Map();",
   "  svg.querySelectorAll('.hex').forEach(function (el) { hexEls.set(el.dataset.key, el); });",
@@ -320,6 +327,8 @@ const SCRIPT = [
   "  });",
   "  var ball = DATA.ball;",
   "  var rng = DATA.seed | 0;",
+  "  // the last resolved contest (steal or tackle), shown in the .log line until reset",
+  "  var lastChallenge = null;",
   "  function piece(id) { return pieces.filter(function (p) { return p.id === id; })[0]; }",
   "  function ballCarrier() { return ball ? pieces.filter(function (p) { return p.at === ball; })[0] || null : null; }",
   "  function attrOf(p, key) {",
@@ -423,6 +432,9 @@ const SCRIPT = [
   "    var outcome = { defenderId: def.id, attackerId: carrier.id, at: at, start: start,",
   "                    approachEnd: approachEnd, roll: roll, foul: foul,",
   "                    winner: foul ? null : roll.winner };",
+  "    lastChallenge = { kind: 'tackle', roll: roll, foul: foul, winner: outcome.winner,",
+  "      defLabel: def.label, attLabel: carrier.label,",
+  "      defAttr: attrOf(def, 'tackling'), attAttr: attrOf(carrier, 'dribbling') };",
   "    var base = { activeId: def.id, target: null, path: [], stepIndex: 0, steal: null, outcome: outcome };",
   "    if (foul) { snap = Object.assign({ phase: 'foul' }, base); return; }",
   "    if (roll.tie) { snap = Object.assign({ phase: 'looseBall' }, base); return; }",
@@ -436,6 +448,7 @@ const SCRIPT = [
   "      var p = piece(ev.pieceId); if (!p) return;",
   "      snap = { phase: aimingPhase(p), activeId: p.id, target: null, path: [], stepIndex: 0, steal: null, outcome: null };",
   "      tree = flood(p.id);",
+  "      lastChallenge = null;",
   "    } else if (ev.type === 'hoverHex') {",
   "      if (snap.phase !== 'aiming') return;",
   "      if (!ev.hex) { snap.target = null; snap.path = []; return; }",
@@ -447,12 +460,14 @@ const SCRIPT = [
   "      var route = pathTo(tree, hex);",
   "      if (!route || route.length < 2) return;",
   "      snap.phase = 'moving'; snap.target = hex; snap.path = route; snap.stepIndex = 0; snap.steal = null;",
+  "      lastChallenge = null;",
   "    } else if (ev.type === 'tackle') {",
   "      if (snap.phase !== 'aiming' || !snap.activeId) return;",
   "      var reach = reachTackle(snap.activeId); var c = ballCarrier();",
   "      if (!reach || !c) return;",
   "      snap = { phase: 'tackling', activeId: snap.activeId, target: c.at, path: reach.path,",
   "               stepIndex: 0, steal: null, outcome: null };",
+  "      lastChallenge = null;",
   "    } else if (ev.type === 'relocate') {",
   "      if (snap.phase !== 'relocating' || !snap.outcome) return;",
   "      if (relocationOptions(snap.outcome).indexOf(ev.hex) < 0) return;",
@@ -485,10 +500,13 @@ const SCRIPT = [
   "          if (by !== null) {",
   "            mover.at = hex2; mover.movePoints -= i;",
   "            ball = piece(by).at;",
+  "            lastChallenge = { kind: 'steal', ok: true, by: by, rolls: rolls, need: DATA.stealOn };",
   "            snap = { phase: 'stopped', activeId: snap.activeId, target: null, path: [], stepIndex: 0,",
   "                     steal: { by: by, at: hex2, rolls: rolls }, outcome: null };",
   "            return;",
   "          }",
+  "          lastChallenge = { kind: 'steal', ok: false,",
+  "            foes: foes.map(function (fp) { return fp.id; }), rolls: rolls, need: DATA.stealOn };",
   "        }",
   "      }",
   "      snap.stepIndex = i;",
@@ -547,6 +565,31 @@ const SCRIPT = [
   "    el.setAttribute('transform', 'translate(' + (q.x + (dx||0)).toFixed(2) + ' ' + (q.y + (dy||0)).toFixed(2) + ')');",
   "  }",
   "",
+  "  // The persistent readout under the board: dice numbers + a plain-text result.",
+  "  function challengeLog() {",
+  "    var c = lastChallenge;",
+  "    if (!c) return null;",
+  "    if (c.kind === 'steal') {",
+  "      var dice = 'd6 ' + c.rolls.join(', ') + ' (steal on \\u2264' + c.need + ')';",
+  "      if (c.ok) {",
+  "        return { cls: 'steal', text: 'successful ball-steal \\u2014 ' + piece(c.by).label +",
+  "          ' takes the ball  \\u00b7  ' + dice };",
+  "      }",
+  "      var names = c.foes.map(function (id) { return piece(id).label; }).join(', ');",
+  "      return { cls: '', text: 'failed ball-steal \\u2014 carrier breaks past ' + names +",
+  "        '  \\u00b7  ' + dice };",
+  "    }",
+  "    var r = c.roll;",
+  "    var dice2 = 'd6 ' + r.defenderRoll + '+' + c.defAttr + ' tackling  vs  d6 ' + r.attackerRoll + '+' +",
+  "      c.attAttr + ' dribbling  \\u2192  ' + r.defenderScore + '\\u2013' + r.attackerScore;",
+  "    if (c.foul) return { cls: 'steal', text: 'foul \\u2014 defender rolled 1  \\u00b7  ' + dice2 + '  (TODO)' };",
+  "    if (c.winner === null) return { cls: '', text: 'loose ball \\u2014 scores level  \\u00b7  ' + dice2 + '  (TODO)' };",
+  "    if (c.winner === 'defender') {",
+  "      return { cls: 'win', text: 'successful tackle \\u2014 ' + c.defLabel + ' wins the ball  \\u00b7  ' + dice2 };",
+  "    }",
+  "    return { cls: '', text: 'failed tackle \\u2014 ' + c.attLabel + ' rides the challenge  \\u00b7  ' + dice2 };",
+  "  }",
+  "",
   "  function render() {",
   "    var carrier = ballCarrier();",
   "    var carrying = carrier && snap.activeId != null && carrier.id === snap.activeId;",
@@ -593,16 +636,16 @@ const SCRIPT = [
   "    stayBtn.hidden = snap.phase !== 'relocating';",
   "    if (snap.steal) {",
   "      var thief = piece(snap.steal.by);",
-  "      statusEl.textContent = 'ball stolen by ' + thief.label + '  (rolled ' + snap.steal.rolls.join(', ') + ')';",
+  "      statusEl.textContent = 'successful ball-steal \\u2014 ball to ' + thief.label;",
   "    } else if (snap.phase === 'foul') {",
-  "      statusEl.textContent = 'FOUL \\u2014 defender rolled 1 (handled separately \\u2014 TODO)';",
+  "      statusEl.textContent = 'foul \\u2014 defender rolled 1 (TODO)';",
   "    } else if (snap.phase === 'looseBall') {",
-  "      var lr = snap.outcome.roll;",
-  "      statusEl.textContent = 'loose ball \\u2014 scores level ' + lr.attackerScore + '\\u2013' + lr.defenderScore + ' (TODO)';",
+  "      statusEl.textContent = 'loose ball \\u2014 scores level (TODO)';",
   "    } else if (snap.phase === 'relocating') {",
   "      var o = snap.outcome, w = o.winner === 'defender' ? piece(o.defenderId) : piece(o.attackerId);",
-  "      statusEl.textContent = w.label + ' wins the challenge (' + o.roll.attackerScore + '\\u2013' + o.roll.defenderScore +",
-  "        ')  \\u00b7  ' + relo.length + ' hex' + (relo.length === 1 ? '' : 'es') + ' \\u2014 or stay';",
+  "      var head = o.winner === 'defender' ? 'successful tackle' : 'failed tackle';",
+  "      statusEl.textContent = head + ' \\u2014 place ' + w.label + ' in ' + relo.length + ' hex' +",
+  "        (relo.length === 1 ? '' : 'es') + ' \\u2014 or stay';",
   "    } else if (snap.phase === 'tackling') statusEl.textContent = 'tackling\\u2026';",
   "    else if (snap.phase === 'idle') statusEl.textContent = 'select a piece';",
   "    else if (snap.phase === 'moving') statusEl.textContent = 'moving\\u2026';",
@@ -611,6 +654,10 @@ const SCRIPT = [
   "      var note = carrying && hazards.size ? '  \\u26a0 ' + hazards.size + ' risky' : (tk ? '  \\u2014 click ' + piece(tk.carrierId).label + ' to tackle' : '');",
   "      statusEl.textContent = ap.label + ': ' + ap.movePoints + ' MP  \\u00b7  ' + reach.size + ' in reach' + note;",
   "    }",
+  "    var log = challengeLog();",
+  "    logEl.hidden = !log;",
+  "    logEl.className = 'log' + (log && log.cls ? ' ' + log.cls : '');",
+  "    logEl.textContent = log ? log.text : '';",
   "  }",
   "",
   "  // Walk a committed path (moving or the tackle approach) hex by hex.",
@@ -656,6 +703,7 @@ const SCRIPT = [
   "    rng = (Math.random() * 0x7fffffff) | 0;",
   "    snap = idle();",
   "    tree = null;",
+  "    lastChallenge = null;",
   "    render();",
   "  });",
   "",
@@ -692,6 +740,8 @@ export function writeMovementPlayground(
     `all its move points and a d6 + tackling vs d6 + dribbling challenge decides ` +
     `the ball. The winner clicks a green hex to reposition, or <strong>stay</strong>. ` +
     `A defender 1 is a foul, level scores a loose ball — both TODO. ` +
+    `Every challenge logs its dice and a plain result under the board — ` +
+    `<em>successful ball-steal</em>, <em>failed tackle</em>, <em>successful tackle</em>. ` +
     `<strong>reset</strong> re-rolls the seed. Same reducer as <code>move-action</code>.</p>\n` +
     `  <div class="cases">\n` +
     rendered.map((r) => r.section).join("\n") +

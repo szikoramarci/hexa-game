@@ -287,6 +287,19 @@ describe("movement playground page — the tackle", () => {
     expect(html).toContain("reachTackle");
   });
 
+  it("logs each challenge's dice and a plain result under the board", () => {
+    expect(html).toContain('<p class="log" hidden>');
+    expect(html).toContain("function challengeLog()");
+    for (const result of [
+      "successful ball-steal",
+      "failed ball-steal",
+      "successful tackle",
+      "failed tackle",
+    ]) {
+      expect(html).toContain(result);
+    }
+  });
+
   it("offers the tackle only when the carrier is in budget", () => {
     const close = caseState(CASES[idx("close down the carrier — a hard tackle")]!);
     expect(reachTackle(close, "case-p0")).not.toBeNull();

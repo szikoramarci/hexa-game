@@ -161,7 +161,11 @@ inline mirror learned `reachTackle` / `resolveChallenge` / `freeNeighbours` /
 `relocationOptions` / `applyTackle` and the `tackling` / `relocating` / `foul` /
 `looseBall` phases. A selected defender in range makes the enemy carrier glow
 red (`.tackle-target`) and draws the approach arrow with a red lunge head; click
-the carrier to tackle. Resolution shows a dice readout in the status line;
+the carrier to tackle. Resolution logs a `.log` line under the board (kept until
+`reset`): the challenge dice (`d6 r+tackling vs d6 r+dribbling -> scores`) and a
+plain result — **successful tackle** / **failed tackle** / **foul** / **loose
+ball**. The ball-steal check logs the same way — **successful ball-steal** /
+**failed ball-steal** with its `d6` rolls.
 `relocating` paints the legal spots green (click to place) and shows a **stay**
 button (cancel). Foul / loose ball print a `TODO` status and dead-end.
 

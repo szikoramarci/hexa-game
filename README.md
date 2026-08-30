@@ -132,7 +132,9 @@ aggregating across the parallel vitest workers.
   hovering a route past a defender pulses the risky hexes red and the carrier
   shivers, and walking it rolls the steal check. A selected defender that can
   reach the enemy carrier (glowing red) clicks it to **tackle** — the challenge
-  resolves and the winner clicks a green hex to reposition, or **stay**. `reset`
+  resolves and the winner clicks a green hex to reposition, or **stay**. Each
+  steal / tackle challenge logs its dice and a plain result under the board
+  (*successful ball-steal*, *failed tackle*, *successful tackle*…). `reset`
   re-rolls the seed. The inline script mirrors the `move-action` reducer,
   tackle included. Authored in `src/movement/movement.playground.test.ts`; see
   `docs/move-action.md` + `docs/tackle-action.md`.
