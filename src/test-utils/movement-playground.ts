@@ -1,6 +1,7 @@
 import { cubeKey, type Cube } from "../coordinates/coordinates.js";
+import { seedRng } from "../dice/dice.js";
 import { cubeToPixel, DEFAULT_HEX_SIZE } from "../layout/layout.js";
-import { disc, hexCorners, playerMarker } from "./board.js";
+import { ballMarker, disc, hexCorners, playerMarker } from "./board.js";
 import { actionPage, registerActionGroup } from "./gallery.js";
 import type { RenderOptions } from "./render-scenario.js";
 
@@ -12,10 +13,11 @@ const COLOR = {
   obstacle: "#4a4a4a",
   grid: "#999",
   arrow: "#ff8c00",
+  danger: "#d33",
 } as const;
 
-/** Piece fill, by index. */
-const PIECE_COLORS = ["#d33", "#2478c9", "#2a9d5c", "#a3599f"] as const;
+/** Fill per team, in first-seen order. */
+const TEAM_COLORS = ["#d33", "#2478c9"] as const;
 
 const STEP_MS = 140;
 
@@ -26,6 +28,10 @@ export interface PlaygroundPiece {
   label: string | number;
   /** Hexes it may travel — its `movePoints`. */
   movePoints: number;
+  /** Which side it is on — exactly two teams per board. */
+  team: string;
+  /** Marks the ball carrier. At most one piece per board. */
+  hasBall?: boolean;
 }
 
 /** One board on the movement page. */
@@ -38,6 +44,10 @@ export interface MovementPlayground {
   obstacle?: Iterable<Cube>;
   /** Do pieces block each other? Default `true`. */
   piecesBlock?: boolean;
+  /** Steal-check die size. Default 6. */
+  stealDie?: number;
+  /** A steal-check roll at or below this takes the ball. Default 1. */
+  stealOn?: number;
 }
 
 /** One titled case on the movement page. */
@@ -61,7 +71,17 @@ interface CaseData {
   board: string[];
   obstacles: string[];
   piecesBlock: boolean;
-  pieces: { id: string; at: string; label: string; movePoints: number }[];
+  ball: string | null;
+  stealDie: number;
+  stealOn: number;
+  seed: number;
+  pieces: {
+    id: string;
+    at: string;
+    label: string;
+    movePoints: number;
+    team: string;
+  }[];
 }
 
 /** The `<section>` markup for one case, plus the data blob its script needs. */
@@ -104,19 +124,31 @@ function renderCase(
     })
     .join("\n");
 
+  const teams: string[] = [];
+  for (const piece of p.pieces) {
+    if (!teams.includes(piece.team)) teams.push(piece.team);
+  }
+  const teamColor = (team: string): string =>
+    TEAM_COLORS[Math.max(0, teams.indexOf(team)) % TEAM_COLORS.length]!;
+
   const pieces = p.pieces.map((piece, i) => ({
     id: `${id}-p${i}`,
     at: cubeKey(piece.at),
     label: String(piece.label),
     movePoints: piece.movePoints,
-    color: PIECE_COLORS[i % PIECE_COLORS.length]!,
+    team: piece.team,
+    color: teamColor(piece.team),
+    hasBall: piece.hasBall === true,
   }));
+
+  const carrier = pieces.find((piece) => piece.hasBall) ?? null;
 
   const pieceEls = pieces
     .map((piece, i) => {
       const px = cubeToPixel(p.pieces[i]!.at, size);
       return (
         `        <g class="piece" data-id="${piece.id}" data-home="${piece.at}" ` +
+        `data-team="${escapeHtml(piece.team)}" ` +
         `transform="translate(${f(px.x)} ${f(px.y)})">` +
         playerMarker(size, piece.color, piece.label) +
         `</g>`
@@ -124,16 +156,29 @@ function renderCase(
     })
     .join("\n");
 
+  const ballEl = carrier
+    ? `\n        <g class="ball" transform="translate(${f(
+        cubeToPixel(p.pieces[pieces.indexOf(carrier)]!.at, size).x + size * 0.4,
+      )} ${f(
+        cubeToPixel(p.pieces[pieces.indexOf(carrier)]!.at, size).y - size * 0.4,
+      )})">${ballMarker(size, id)}</g>`
+    : "";
+
   const data: CaseData = {
     size,
     board: hexes.map((h) => cubeKey(h)),
     obstacles: [...obstacleKeys],
     piecesBlock: p.piecesBlock !== false,
-    pieces: pieces.map(({ id, at, label, movePoints }) => ({
-      id,
+    ball: carrier ? carrier.at : null,
+    stealDie: p.stealDie ?? 6,
+    stealOn: p.stealOn ?? 1,
+    seed: seedRng(`${id}`),
+    pieces: pieces.map(({ id: pid, at, label, movePoints, team }) => ({
+      id: pid,
       at,
       label,
       movePoints,
+      team,
     })),
   };
 
@@ -144,6 +189,7 @@ function renderCase(
     polygons +
     `\n        <g class="arrow-layer"></g>\n` +
     pieceEls +
+    ballEl +
     `\n      </svg>\n` +
     `      <div class="hud"><span class="status"></span>` +
     `<button class="reset" type="button">reset</button></div>\n` +
@@ -163,30 +209,58 @@ const CASES_CSS = `
   .hex.obs { fill: ${COLOR.obstacle}; }
   .hex.reach { fill: ${COLOR.reachable}; cursor: pointer; }
   .hex.reach:hover { fill: ${COLOR.reachableHover}; }
+  .hex.hazard { stroke: ${COLOR.danger}; stroke-width: 3;
+    animation: haz 1s ease-in-out infinite; }
+  @keyframes haz { 0%,100% { stroke-opacity: .3 } 50% { stroke-opacity: 1 } }
   .arrow-layer { pointer-events: none; }
   .piece { cursor: pointer; transition: transform ${STEP_MS}ms linear; }
   .piece.selected { filter: drop-shadow(0 0 3px #1560c4); }
   .piece.dim { opacity: .5; }
+  .piece .marker { transition: transform .1s; }
+  .piece.wary .marker { animation: wary .16s linear infinite; }
+  @keyframes wary { 0%,100% { transform: translate(0,0) }
+    25% { transform: translate(.7px,-.5px) } 50% { transform: translate(-.6px,.5px) }
+    75% { transform: translate(.5px,.6px) } }
+  .piece.robbed .marker { animation: robbed .28s linear 3; }
+  @keyframes robbed { 0%,100% { transform: translate(0,0) }
+    30% { transform: translate(-2px,0) } 70% { transform: translate(2px,0) } }
+  .ball { pointer-events: none; transition: transform ${STEP_MS}ms linear; }
   .hud { display: flex; align-items: center; justify-content: space-between;
     gap: .75rem; margin-top: .5rem; font-size: .8rem; color: #666; }
+  .hud .status.stolen { color: ${COLOR.danger}; font-weight: 700; }
   .reset { font: inherit; padding: .1rem .55rem; cursor: pointer; }`;
 
 /**
- * The live layer, once per page. `initCase(section, DATA)` is a faithful mirror
- * of `src/move-action/move-action.ts` — the same `MoveActionState`, the same
- * `idle -> aiming -> moving -> spent` reducer over the same events — running on
- * a small `cubeToPixel` + BFS-flood port (unit step cost, so BFS parents are the
- * shortest path, matching `movePath`). Kept honest by the playground test's
- * cross-check against the real module. No backticks / `${` so it embeds verbatim.
+ * The live layer, once per page. `initCase(section, DATA)` mirrors
+ * `src/move-action/move-action.ts` — the same `MoveActionState`, the same
+ * `idle → aiming → moving → (stopped | spent)` reducer over the same events,
+ * including the ball-steal check: a carrier stepping into an opponent's
+ * influence rolls a `d6` per opponent (seeded `mulberry32`, matching
+ * `src/dice`), and a `1` ends the move and hands over the ball. Kept honest by
+ * the playground test's cross-check against the real modules. No backticks /
+ * `${` so it embeds verbatim.
  */
 const SCRIPT = [
   "var DIRS = [[1,-1,0],[1,0,-1],[0,1,-1],[-1,1,0],[-1,0,1],[0,-1,1]];",
   "var STEP_MS = " + STEP_MS + ";",
   "var ARROW = '" + COLOR.arrow + "';",
+  "function parse(k) { return k.split(',').map(Number); }",
   "function neighbours(key) {",
-  "  var p = key.split(',').map(Number);",
+  "  var p = parse(key);",
   "  return DIRS.map(function (d) { return (p[0]+d[0])+','+(p[1]+d[1])+','+(p[2]+d[2]); });",
   "}",
+  "function cubeDist(a, b) {",
+  "  var p = parse(a), q = parse(b);",
+  "  return (Math.abs(p[0]-q[0]) + Math.abs(p[1]-q[1]) + Math.abs(p[2]-q[2])) / 2;",
+  "}",
+  "// mulberry32, matching src/dice: [value, nextState]",
+  "function nextRandom(s) {",
+  "  var a = (s + 0x6d2b79f5) | 0;",
+  "  var t = Math.imul(a ^ (a >>> 15), 1 | a);",
+  "  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;",
+  "  return [((t ^ (t >>> 14)) >>> 0) / 4294967296, a];",
+  "}",
+  "function rollDie(s, sides) { var r = nextRandom(s); return [Math.floor(r[0]*sides)+1, r[1]]; }",
   "",
   "function initCase(section, DATA) {",
   "  var SIZE = DATA.size;",
@@ -194,6 +268,7 @@ const SCRIPT = [
   "  var obstacles = new Set(DATA.obstacles);",
   "  var svg = section.querySelector('.board');",
   "  var arrowLayer = svg.querySelector('.arrow-layer');",
+  "  var ballEl = svg.querySelector('.ball');",
   "  var statusEl = section.querySelector('.status');",
   "  var hexEls = new Map();",
   "  svg.querySelectorAll('.hex').forEach(function (el) { hexEls.set(el.dataset.key, el); });",
@@ -201,16 +276,28 @@ const SCRIPT = [
   "  svg.querySelectorAll('.piece').forEach(function (el) { pieceEls.set(el.dataset.id, el); });",
   "",
   "  function toPixel(key) {",
-  "    var p = key.split(',').map(Number);",
+  "    var p = parse(key);",
   "    return { x: SIZE * Math.sqrt(3) * (p[0] + p[2] / 2), y: SIZE * 1.5 * p[2] };",
   "  }",
   "",
   "  // --- game state (mirrors MoveActionState) ---",
   "  var pieces = DATA.pieces.map(function (p) {",
   "    return { id: p.id, at: p.at, label: p.label, movePoints: p.movePoints,",
-  "             home: p.at, homeMP: p.movePoints };",
+  "             team: p.team, home: p.at, homeMP: p.movePoints };",
   "  });",
+  "  var ball = DATA.ball;",
+  "  var rng = DATA.seed | 0;",
   "  function piece(id) { return pieces.filter(function (p) { return p.id === id; })[0]; }",
+  "  function ballCarrier() { return ball ? pieces.filter(function (p) { return p.at === ball; })[0] || null : null; }",
+  "  function influencers(hex, team) {",
+  "    return pieces.filter(function (p) { return p.team !== team && cubeDist(p.at, hex) === 1; })",
+  "      .sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });",
+  "  }",
+  "  // opponents whose influence `to` enters that `from` was not already in",
+  "  function enteredInfluence(from, to, team) {",
+  "    var before = new Set(influencers(from, team).map(function (p) { return p.id; }));",
+  "    return influencers(to, team).filter(function (p) { return !before.has(p.id); });",
+  "  }",
   "",
   "  function blockersFor(id) {",
   "    var b = new Set(obstacles);",
@@ -242,7 +329,7 @@ const SCRIPT = [
   "  }",
   "",
   "  // --- snapshot (mirrors MoveActionSnapshot) ---",
-  "  var snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0 };",
+  "  var snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0, steal: null };",
   "  var tree = null;",
   "  function aimingPhase(p) { return p.movePoints > 0 ? 'aiming' : 'spent'; }",
   "",
@@ -250,7 +337,7 @@ const SCRIPT = [
   "    if (ev.type === 'selectPiece') {",
   "      if (snap.phase === 'moving') return;",
   "      var p = piece(ev.pieceId); if (!p) return;",
-  "      snap = { phase: aimingPhase(p), activeId: p.id, target: null, path: [], stepIndex: 0 };",
+  "      snap = { phase: aimingPhase(p), activeId: p.id, target: null, path: [], stepIndex: 0, steal: null };",
   "      tree = flood(p.id);",
   "    } else if (ev.type === 'hoverHex') {",
   "      if (snap.phase !== 'aiming') return;",
@@ -262,33 +349,58 @@ const SCRIPT = [
   "      var hex = ev.hex || snap.target; if (!hex) return;",
   "      var route = pathTo(tree, hex);",
   "      if (!route || route.length < 2) return;",
-  "      snap.phase = 'moving'; snap.target = hex; snap.path = route; snap.stepIndex = 0;",
+  "      snap.phase = 'moving'; snap.target = hex; snap.path = route; snap.stepIndex = 0; snap.steal = null;",
   "    } else if (ev.type === 'advance') {",
   "      if (snap.phase !== 'moving') return;",
-  "      snap.stepIndex++;",
+  "      var i = snap.stepIndex + 1;",
+  "      var hex2 = snap.path[i];",
+  "      var prev = snap.path[i - 1];",
+  "      var mover = piece(snap.activeId);",
+  "      var carrier = ballCarrier();",
+  "      var carrying = carrier && carrier.id === snap.activeId;",
+  "      if (carrying) {",
+  "        var foes = enteredInfluence(prev, hex2, mover.team);",
+  "        if (foes.length) {",
+  "          var rolls = [], by = null;",
+  "          for (var k = 0; k < foes.length; k++) {",
+  "            var rr = rollDie(rng, DATA.stealDie); rng = rr[1]; rolls.push(rr[0]);",
+  "            if (by === null && rr[0] <= DATA.stealOn) by = foes[k].id;",
+  "          }",
+  "          if (by !== null) {",
+  "            mover.at = hex2; mover.movePoints -= i;",
+  "            ball = piece(by).at;",
+  "            snap = { phase: 'stopped', activeId: snap.activeId, target: null, path: [], stepIndex: 0,",
+  "                     steal: { by: by, at: hex2, rolls: rolls } };",
+  "            return;",
+  "          }",
+  "        }",
+  "      }",
+  "      snap.stepIndex = i;",
   "      if (snap.stepIndex < snap.path.length - 1) return;",
   "      var ap = piece(snap.activeId);",
+  "      var wasCarrier = carrying;",
   "      ap.at = snap.path[snap.path.length - 1];",
   "      ap.movePoints -= (snap.path.length - 1);",
-  "      snap = { phase: aimingPhase(ap), activeId: ap.id, target: null, path: [], stepIndex: 0 };",
+  "      if (wasCarrier) ball = ap.at;",
+  "      snap = { phase: aimingPhase(ap), activeId: ap.id, target: null, path: [], stepIndex: 0, steal: null };",
   "      tree = flood(ap.id);",
   "    } else if (ev.type === 'cancel') {",
   "      if (snap.phase === 'moving') return;",
-  "      snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0 };",
+  "      snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0, steal: null };",
   "      tree = null;",
   "    }",
   "  }",
   "",
   "  // --- rendering (mirrors moveView) ---",
   "  function svgEl(t) { return document.createElementNS('http://www.w3.org/2000/svg', t); }",
-  "  function drawArrow(path) {",
+  "  function drawArrow(path, danger) {",
   "    arrowLayer.replaceChildren();",
   "    if (path.length < 2) return;",
   "    var pts = path.map(toPixel);",
   "    var poly = svgEl('polyline');",
   "    poly.setAttribute('points', pts.map(function (q) { return q.x.toFixed(2)+','+q.y.toFixed(2); }).join(' '));",
   "    poly.setAttribute('fill', 'none');",
-  "    poly.setAttribute('stroke', ARROW);",
+  "    poly.setAttribute('stroke', danger ? '" + COLOR.danger + "' : ARROW);",
   "    poly.setAttribute('stroke-width', (SIZE * 0.16).toFixed(2));",
   "    poly.setAttribute('stroke-linecap', 'round');",
   "    poly.setAttribute('stroke-linejoin', 'round');",
@@ -305,43 +417,67 @@ const SCRIPT = [
   "      (bx - uy*hw).toFixed(2)+','+(by + ux*hw).toFixed(2),",
   "      (bx + uy*hw).toFixed(2)+','+(by - ux*hw).toFixed(2)",
   "    ].join(' '));",
-  "    head.setAttribute('fill', ARROW);",
+  "    head.setAttribute('fill', danger ? '" + COLOR.danger + "' : ARROW);",
   "    arrowLayer.appendChild(head);",
   "  }",
-  "  function placePiece(el, key) {",
+  "  function placeAt(el, key, dx, dy) {",
   "    var q = toPixel(key);",
-  "    el.setAttribute('transform', 'translate(' + q.x.toFixed(2) + ' ' + q.y.toFixed(2) + ')');",
+  "    el.setAttribute('transform', 'translate(' + (q.x + (dx||0)).toFixed(2) + ' ' + (q.y + (dy||0)).toFixed(2) + ')');",
   "  }",
   "",
   "  function render() {",
+  "    var carrier = ballCarrier();",
+  "    var carrying = carrier && snap.activeId != null && carrier.id === snap.activeId;",
+  "    // hazards on the previewed path (aiming, carrier only)",
+  "    var hazards = new Set();",
+  "    if (snap.phase === 'aiming' && carrying) {",
+  "      var active = piece(snap.activeId);",
+  "      for (var i = 1; i < snap.path.length; i++) {",
+  "        if (enteredInfluence(snap.path[i-1], snap.path[i], active.team).length) hazards.add(snap.path[i]);",
+  "      }",
+  "    }",
   "    pieces.forEach(function (p) {",
   "      var el = pieceEls.get(p.id);",
-  "      // while walking, the active piece sits on the hex it has reached so far",
-  "      // (snap.stepIndex), so each `advance` slides it one hex along the path.",
-  "      var moving = snap.phase === 'moving' && p.id === snap.activeId;",
-  "      placePiece(el, moving ? snap.path[snap.stepIndex] : p.at);",
+  "      var walking = snap.phase === 'moving' && p.id === snap.activeId;",
+  "      placeAt(el, walking ? snap.path[snap.stepIndex] : p.at);",
   "      el.classList.toggle('selected', p.id === snap.activeId);",
   "      el.classList.toggle('dim', p.movePoints === 0 && p.id !== snap.activeId);",
+  "      el.classList.toggle('wary', p.id === snap.activeId && hazards.size > 0);",
+  "      el.classList.toggle('robbed', snap.steal != null && p.id === snap.activeId);",
   "    });",
+  "    // ball follows its carrier (its current walking hex while moving)",
+  "    if (ballEl) {",
+  "      var bkey = ball;",
+  "      if (snap.phase === 'moving' && carrier && carrier.id === snap.activeId) bkey = snap.path[snap.stepIndex];",
+  "      if (bkey) placeAt(ballEl, bkey, SIZE * 0.4, -SIZE * 0.4);",
+  "    }",
   "    var reach = new Set();",
   "    if (tree && (snap.phase === 'aiming' || snap.phase === 'spent')) {",
   "      tree.dist.forEach(function (d, key) { if (key !== tree.origin) reach.add(key); });",
   "    }",
-  "    hexEls.forEach(function (el, key) { el.classList.toggle('reach', reach.has(key)); });",
-  "    drawArrow(snap.path);",
-  "    if (snap.phase === 'idle') statusEl.textContent = 'select a piece';",
+  "    hexEls.forEach(function (el, key) {",
+  "      el.classList.toggle('reach', reach.has(key));",
+  "      el.classList.toggle('hazard', hazards.has(key));",
+  "    });",
+  "    drawArrow(snap.path, hazards.size > 0);",
+  "    statusEl.classList.toggle('stolen', snap.phase === 'stopped');",
+  "    if (snap.steal) {",
+  "      var thief = piece(snap.steal.by);",
+  "      statusEl.textContent = 'ball stolen by ' + thief.label + '  (rolled ' + snap.steal.rolls.join(', ') + ')';",
+  "    } else if (snap.phase === 'idle') statusEl.textContent = 'select a piece';",
   "    else if (snap.phase === 'moving') statusEl.textContent = 'moving\\u2026';",
   "    else {",
   "      var ap = piece(snap.activeId);",
-  "      statusEl.textContent = ap.label + ': ' + ap.movePoints + ' MP  \\u00b7  ' + reach.size + ' in reach';",
+  "      var note = carrying && hazards.size ? '  \\u26a0 ' + hazards.size + ' risky' : '';",
+  "      statusEl.textContent = ap.label + ': ' + ap.movePoints + ' MP  \\u00b7  ' + reach.size + ' in reach' + note;",
   "    }",
   "  }",
   "",
   "  // Walk the committed path hex by hex: one `advance` per tick, render()",
-  "  // slides the piece to the next hex (CSS transition on `.piece`).",
+  "  // slides the piece (and its ball) to the next hex.",
   "  function runMove() {",
   "    (function stepOn() {",
-  "      if (snap.phase !== 'moving') return;",
+  "      if (snap.phase !== 'moving') { render(); return; }",
   "      dispatch({ type: 'advance' });",
   "      render();",
   "      if (snap.phase === 'moving') setTimeout(stepOn, STEP_MS);",
@@ -367,7 +503,9 @@ const SCRIPT = [
   "  section.querySelector('.reset').addEventListener('click', function () {",
   "    if (snap.phase === 'moving') return;",
   "    pieces.forEach(function (p) { p.at = p.home; p.movePoints = p.homeMP; });",
-  "    snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0 };",
+  "    ball = DATA.ball;",
+  "    rng = (Math.random() * 0x7fffffff) | 0;",
+  "    snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0, steal: null };",
   "    tree = null;",
   "    render();",
   "  });",
@@ -381,11 +519,6 @@ const SCRIPT = [
  * Render every {@link MovementCase} onto one interactive page at
  * `scenarios/actions/<slug>/index.html` and register it on the landing nav.
  * Returns the page HTML.
- *
- * @param slug   Action folder / landing card slug (e.g. `"movement"`).
- * @param label  Landing-card title (e.g. `"piece movement"`).
- * @param blurb  Landing-card one-liner.
- * @param cases  The boards, in display order.
  */
 export function writeMovementPlayground(
   slug: string,
@@ -402,11 +535,11 @@ export function writeMovementPlayground(
     `  <a class="back" href="../../index.html">&larr; all scenarios</a>\n` +
     `  <h1>${escapeHtml(label)}</h1>\n` +
     `  <p class="lede">${escapeHtml(blurb)} <strong>Click a piece</strong> to ` +
-    `pick it up — its reachable hexes turn blue. Hover one for the dashed move ` +
-    `arrow, click it to walk there hex by hex. Obstacles (dark) and other pieces ` +
-    `block; each move spends move points. Click another piece to switch, ` +
-    `<strong>reset</strong> to start over. Same <code>idle → aiming → ` +
-    `moving</code> reducer as <code>move-action</code>.</p>\n` +
+    `pick it up — reachable hexes turn blue. Hover one for the move arrow, click ` +
+    `to walk there hex by hex. If the ball carrier steps beside an opponent ` +
+    `(red pulsing hexes) a d6 is rolled per opponent — a <strong>1</strong> and ` +
+    `they take the ball and the move ends. <strong>reset</strong> re-rolls the ` +
+    `seed. Same reducer as <code>move-action</code>.</p>\n` +
     `  <div class="cases">\n` +
     rendered.map((r) => r.section).join("\n") +
     `\n  </div>\n` +

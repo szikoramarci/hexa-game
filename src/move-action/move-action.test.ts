@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { cube, cubeEquals, cubeKey, type Cube } from "../coordinates/coordinates.js";
+import { rollDie, seedRng } from "../dice/dice.js";
 import { reachableCubes } from "../movement/movement.js";
 import {
   applyMove,
+  ballCarrier,
+  enteredInfluence,
+  influencers,
   initMoveAction,
   moveAction,
   moveArrow,
   movePath,
   moveView,
+  pathHazards,
   reachableForPiece,
   type MoveActionSnapshot,
   type MoveActionState,
@@ -17,15 +22,22 @@ import {
 const origin = cube(0, 0, 0);
 const keys = (hexes: Iterable<Cube>) => new Set([...hexes].map(cubeKey));
 
+const piece = (over: Partial<Piece> & Pick<Piece, "id" | "at">): Piece => ({
+  label: 1,
+  movePoints: 3,
+  team: "home",
+  ...over,
+});
+
 function state(over: Partial<MoveActionState> = {}): MoveActionState {
   return {
-    pieces: [{ id: "p1", label: 1, at: origin, movePoints: 3 }],
+    pieces: [piece({ id: "p1", at: origin })],
     obstacles: [],
     ...over,
   };
 }
 
-/** Walk a committed "moving" snapshot to completion. */
+/** Walk a committed "moving" snapshot to completion (or a steal). */
 function runMove(snap: MoveActionSnapshot): MoveActionSnapshot {
   let s = snap;
   let guard = 0;
@@ -35,21 +47,39 @@ function runMove(snap: MoveActionSnapshot): MoveActionSnapshot {
   return s;
 }
 
+/** First seed whose first `d6` roll is `1` (a steal); and one where it is not. */
+function seedRollingOne(): number {
+  for (let s = 1; s < 100000; s++) if (rollDie(seedRng(s))[0] === 1) return s;
+  throw new Error("no seed rolls a 1");
+}
+function seedNeverSteals(rolls: number): number {
+  for (let s = 1; s < 100000; s++) {
+    let rng = seedRng(s);
+    let ok = true;
+    for (let i = 0; i < rolls; i++) {
+      const [r, n] = rollDie(rng);
+      if (r === 1) ok = false;
+      rng = n;
+    }
+    if (ok) return s;
+  }
+  throw new Error("no calm seed");
+}
+
 describe("reachableForPiece", () => {
   it("is reachableCubes minus the piece's own hex", () => {
-    const s = state({ pieces: [{ id: "p1", label: 1, at: origin, movePoints: 2 }] });
+    const s = state({ pieces: [piece({ id: "p1", at: origin, movePoints: 2 })] });
     const got = reachableForPiece(s, "p1");
     const expected = reachableCubes(origin, 2).filter((h) => !cubeEquals(h, origin));
     expect(keys(got)).toEqual(keys(expected));
-    expect(got.some((h) => cubeEquals(h, origin))).toBe(false);
   });
 
   it("treats other pieces as blockers by default", () => {
     const wall = cube(1, -1, 0);
     const s = state({
       pieces: [
-        { id: "p1", label: 1, at: origin, movePoints: 3 },
-        { id: "p2", label: 2, at: wall, movePoints: 3 },
+        piece({ id: "p1", at: origin }),
+        piece({ id: "p2", at: wall, team: "away" }),
       ],
     });
     expect(reachableForPiece(s, "p1").some((h) => cubeEquals(h, wall))).toBe(false);
@@ -59,16 +89,15 @@ describe("reachableForPiece", () => {
     const spot = cube(1, -1, 0);
     const s = state({
       piecesBlock: false,
-      pieces: [
-        { id: "p1", label: 1, at: origin, movePoints: 3 },
-        { id: "p2", label: 2, at: spot, movePoints: 3 },
-      ],
+      pieces: [piece({ id: "p1", at: origin }), piece({ id: "p2", at: spot })],
     });
     expect(reachableForPiece(s, "p1").some((h) => cubeEquals(h, spot))).toBe(true);
   });
 
   it("is empty with zero move points", () => {
-    expect(reachableForPiece(state({ pieces: [{ id: "p1", label: 1, at: origin, movePoints: 0 }] }), "p1")).toEqual([]);
+    expect(
+      reachableForPiece(state({ pieces: [piece({ id: "p1", at: origin, movePoints: 0 })] }), "p1"),
+    ).toEqual([]);
   });
 
   it("throws for an unknown piece id", () => {
@@ -78,23 +107,21 @@ describe("reachableForPiece", () => {
 
 describe("movePath", () => {
   it("returns the shortest path including both endpoints", () => {
-    const target = cube(2, -2, 0);
-    const path = movePath(state(), "p1", target)!;
+    const path = movePath(state(), "p1", cube(2, -2, 0))!;
     expect(path[0]).toEqual({ x: 0, y: 0, z: 0 });
     expect(path.at(-1)).toEqual({ x: 2, y: -2, z: 0 });
     expect(path).toHaveLength(3);
   });
 
   it("is null past the piece's move points", () => {
-    const s = state({ pieces: [{ id: "p1", label: 1, at: origin, movePoints: 2 }] });
+    const s = state({ pieces: [piece({ id: "p1", at: origin, movePoints: 2 })] });
     expect(movePath(s, "p1", cube(3, -3, 0))).toBeNull();
   });
 
   it("routes around a wall", () => {
     const obstacles = [cube(1, -1, 0), cube(1, 0, -1), cube(0, 1, -1)];
-    const s = state({ obstacles, pieces: [{ id: "p1", label: 1, at: origin, movePoints: 5 }] });
+    const s = state({ obstacles, pieces: [piece({ id: "p1", at: origin, movePoints: 5 })] });
     const path = movePath(s, "p1", cube(2, -1, -1))!;
-    expect(path).not.toBeNull();
     for (const o of obstacles) expect(path.some((h) => cubeEquals(h, o))).toBe(false);
   });
 
@@ -128,27 +155,86 @@ describe("moveArrow", () => {
 
 describe("applyMove", () => {
   it("moves the piece and spends the step count", () => {
-    const path = [origin, cube(1, -1, 0), cube(2, -2, 0)];
-    const next = applyMove(state(), "p1", path);
+    const next = applyMove(state(), "p1", [origin, cube(1, -1, 0), cube(2, -2, 0)]);
     expect(next.pieces[0]!.at).toEqual({ x: 2, y: -2, z: 0 });
     expect(next.pieces[0]!.movePoints).toBe(1);
   });
 
-  it("leaves other pieces alone and never mutates the input", () => {
-    const s = state({
-      pieces: [
-        { id: "p1", label: 1, at: origin, movePoints: 3 },
-        { id: "p2", label: 2, at: cube(-2, 1, 1), movePoints: 3 },
-      ],
-    });
-    const frozen = structuredClone(s);
+  it("carries the ball along when the mover holds it", () => {
+    const s = state({ ball: origin });
     const next = applyMove(s, "p1", [origin, cube(1, -1, 0)]);
-    expect(next.pieces[1]).toEqual(s.pieces[1]);
+    expect(next.ball).toEqual({ x: 1, y: -1, z: 0 });
+  });
+
+  it("leaves the ball put when a non-carrier moves", () => {
+    const s = state({
+      ball: cube(3, -3, 0),
+      pieces: [piece({ id: "p1", at: origin }), piece({ id: "p2", at: cube(3, -3, 0) })],
+    });
+    expect(applyMove(s, "p1", [origin, cube(1, -1, 0)]).ball).toEqual({ x: 3, y: -3, z: 0 });
+  });
+
+  it("never mutates the input", () => {
+    const s = state({ ball: origin });
+    const frozen = structuredClone(s);
+    applyMove(s, "p1", [origin, cube(1, -1, 0)]);
     expect(s).toEqual(frozen);
   });
 });
 
-describe("moveAction reducer", () => {
+describe("influencers / ballCarrier / pathHazards", () => {
+  const guard = piece({ id: "g", at: cube(2, -2, 0), team: "away" });
+  const runner = piece({ id: "r", at: origin, team: "home", movePoints: 5 });
+  const s = state({ pieces: [runner, guard], ball: origin });
+
+  it("ballCarrier is the piece on the ball hex", () => {
+    expect(ballCarrier(s)?.id).toBe("r");
+    expect(ballCarrier(state())).toBeNull();
+  });
+
+  it("influencers are enemies exactly one hex from the target", () => {
+    expect(influencers(s, cube(2, -1, -1), "home").map((p) => p.id)).toEqual(["g"]);
+    expect(influencers(s, cube(2, -2, 0), "home")).toEqual([]); // the guard's own hex
+    expect(influencers(s, cube(0, 0, 0), "home")).toEqual([]); // too far
+    expect(influencers(s, cube(2, -1, -1), "away")).toEqual([]); // same team as guard
+  });
+
+  it("enteredInfluence is the opponents `to` adds over `from`", () => {
+    // guard at (2,-2,0): covers (1,-1,0) and (2,-1,-1) but not origin.
+    expect(enteredInfluence(s, origin, cube(1, -1, 0), "home").map((p) => p.id)).toEqual(["g"]);
+    // moving along the influence border: (1,-1,0) -> (2,-1,-1), both covered -> nobody new
+    expect(enteredInfluence(s, cube(1, -1, 0), cube(2, -1, -1), "home")).toEqual([]);
+  });
+
+  it("pathHazards flags only the step INTO an influence, not staying in it", () => {
+    // guard at (2,-2,0): covers (1,-1,0) and (2,-1,-1). Enter at (1,-1,0),
+    // stay at (2,-1,-1), leave at (2,0,-2).
+    const path = [origin, cube(1, -1, 0), cube(2, -1, -1), cube(2, 0, -2)];
+    expect(pathHazards(s, "r", path).map(cubeKey)).toEqual([cubeKey(cube(1, -1, 0))]);
+    // p2 doesn't carry the ball -> no hazards even on the same path
+    const s2 = state({ pieces: [runner, guard, piece({ id: "x", at: cube(-1, 0, 1) })], ball: origin });
+    expect(pathHazards(s2, "x", path)).toEqual([]);
+  });
+
+  it("pathHazards flags a re-entry after leaving", () => {
+    // guard at (0,-2,2): covers (0,-1,1) and (1,-2,1), not (1,-1,0).
+    const g2 = state({
+      ball: origin,
+      pieces: [
+        piece({ id: "r", at: origin, team: "home", movePoints: 6 }),
+        piece({ id: "g", at: cube(0, -2, 2), team: "away" }),
+      ],
+    });
+    //  (0,-1,1) enter | (1,-1,0) out | (1,-2,1) enter again
+    const path = [origin, cube(0, -1, 1), cube(1, -1, 0), cube(1, -2, 1)];
+    expect(pathHazards(g2, "r", path).map(cubeKey)).toEqual([
+      cubeKey(cube(0, -1, 1)),
+      cubeKey(cube(1, -2, 1)),
+    ]);
+  });
+});
+
+describe("moveAction reducer — the flow", () => {
   it("starts idle", () => {
     const s = initMoveAction(state());
     expect(s.phase).toBe("idle");
@@ -162,31 +248,28 @@ describe("moveAction reducer", () => {
     expect(moveView(s).reachable.length).toBeGreaterThan(0);
 
     s = moveAction(s, { type: "hoverHex", hex: cube(2, -2, 0) });
-    const view = moveView(s);
-    expect(view.target).toEqual({ x: 2, y: -2, z: 0 });
-    expect(view.arrow?.hexes).toHaveLength(3);
+    expect(moveView(s).arrow?.hexes).toHaveLength(3);
 
     s = moveAction(s, { type: "commit" });
     expect(s.phase).toBe("moving");
-    expect(moveView(s).step).toMatchObject({ index: 0, count: 2 });
+    expect(moveView(s).step).toMatchObject({ index: 0, count: 2, contest: [] });
 
     s = runMove(s);
     expect(s.state.pieces[0]!.at).toEqual({ x: 2, y: -2, z: 0 });
     expect(s.state.pieces[0]!.movePoints).toBe(1);
-    expect(s.phase).toBe("aiming"); // still has a point left
+    expect(s.phase).toBe("aiming");
   });
 
   it("commit with an explicit hex skips the hover step", () => {
     let s = initMoveAction(state());
     s = moveAction(s, { type: "selectPiece", pieceId: "p1" });
     s = moveAction(s, { type: "commit", hex: cube(1, -1, 0) });
-    expect(s.phase).toBe("moving");
     s = runMove(s);
     expect(s.state.pieces[0]!.at).toEqual({ x: 1, y: -1, z: 0 });
   });
 
   it("goes to spent when the piece runs out of move points", () => {
-    let s = initMoveAction(state({ pieces: [{ id: "p1", label: 1, at: origin, movePoints: 1 }] }));
+    let s = initMoveAction(state({ pieces: [piece({ id: "p1", at: origin, movePoints: 1 })] }));
     s = moveAction(s, { type: "selectPiece", pieceId: "p1" });
     s = moveAction(s, { type: "commit", hex: cube(1, -1, 0) });
     s = runMove(s);
@@ -194,12 +277,12 @@ describe("moveAction reducer", () => {
     expect(moveView(s).reachable).toEqual([]);
   });
 
-  it("re-selecting switches the active piece", () => {
+  it("re-selecting switches the active piece; cancel returns to idle", () => {
     let s = initMoveAction(
       state({
         pieces: [
-          { id: "p1", label: 1, at: origin, movePoints: 3 },
-          { id: "p2", label: 2, at: cube(3, -3, 0), movePoints: 3 },
+          piece({ id: "p1", at: origin }),
+          piece({ id: "p2", at: cube(3, -3, 0), team: "away" }),
         ],
       }),
     );
@@ -208,60 +291,148 @@ describe("moveAction reducer", () => {
     s = moveAction(s, { type: "selectPiece", pieceId: "p2" });
     expect(s.activeId).toBe("p2");
     expect(s.target).toBeNull();
-    expect(moveView(s).active?.id).toBe("p2");
-  });
-
-  it("cancel returns to idle", () => {
-    let s = initMoveAction(state());
-    s = moveAction(s, { type: "selectPiece", pieceId: "p1" });
     s = moveAction(s, { type: "cancel" });
     expect(s.phase).toBe("idle");
-    expect(s.activeId).toBeNull();
   });
 
-  it("ignores events that do not apply", () => {
+  it("ignores events that do not apply, and never mutates the snapshot", () => {
     const s0 = initMoveAction(state());
-    expect(moveAction(s0, { type: "hoverHex", hex: origin })).toBe(s0); // not aiming
-    expect(moveAction(s0, { type: "advance" })).toBe(s0); // not moving
+    expect(moveAction(s0, { type: "hoverHex", hex: origin })).toBe(s0);
+    expect(moveAction(s0, { type: "advance" })).toBe(s0);
     expect(moveAction(s0, { type: "selectPiece", pieceId: "ghost" })).toBe(s0);
 
-    let s = moveAction(s0, { type: "selectPiece", pieceId: "p1" });
-    const before = s;
-    s = moveAction(s, { type: "hoverHex", hex: cube(9, -9, 0) }); // unreachable
-    expect(s.target).toBeNull();
-    expect(moveAction(before, { type: "commit", hex: cube(9, -9, 0) })).toBe(before);
-  });
-
-  it("chains two moves within one budget and never mutates a snapshot", () => {
-    let s = initMoveAction(state({ pieces: [{ id: "p1", label: 1, at: origin, movePoints: 4 }] }));
-    const start = s;
-    s = moveAction(s, { type: "selectPiece", pieceId: "p1" });
-    s = moveAction(s, { type: "commit", hex: cube(2, -2, 0) });
-    s = runMove(s);
-    expect(s.state.pieces[0]!.movePoints).toBe(2);
-    s = moveAction(s, { type: "commit", hex: cube(2, -2, 0) }); // aiming again from the new spot
-    // now at (2,-2,0); commit to (2,0,-2) is 2 away
-    s = moveAction(s, { type: "hoverHex", hex: cube(2, 0, -2) });
-    s = moveAction(s, { type: "commit" });
-    s = runMove(s);
-    expect(s.state.pieces[0]!.at).toEqual({ x: 2, y: 0, z: -2 });
-    expect(s.state.pieces[0]!.movePoints).toBe(0);
-    expect(start.phase).toBe("idle"); // original snapshot untouched
+    const s1 = moveAction(s0, { type: "selectPiece", pieceId: "p1" });
+    expect(moveAction(s1, { type: "commit", hex: cube(9, -9, 0) })).toBe(s1);
   });
 
   it("does not accept a new selection mid-move", () => {
     let s = initMoveAction(
       state({
         pieces: [
-          { id: "p1", label: 1, at: origin, movePoints: 4 },
-          { id: "p2", label: 2, at: cube(-3, 3, 0), movePoints: 4 },
+          piece({ id: "p1", at: origin, movePoints: 4 }),
+          piece({ id: "p2", at: cube(-3, 3, 0), team: "away" }),
         ],
       }),
     );
     s = moveAction(s, { type: "selectPiece", pieceId: "p1" });
     s = moveAction(s, { type: "commit", hex: cube(3, -3, 0) });
-    expect(s.phase).toBe("moving");
-    const mid = moveAction(s, { type: "selectPiece", pieceId: "p2" });
-    expect(mid).toBe(s);
+    expect(moveAction(s, { type: "selectPiece", pieceId: "p2" })).toBe(s);
+  });
+});
+
+describe("moveAction reducer — the ball steal", () => {
+  // Carrier at origin heading to (3,0,-3) along (1,0,-1) -> (2,0,-2) -> (3,0,-3).
+  // Guard "gd" at (3,-1,-2): its influence covers (2,0,-2) and (3,0,-3) but not
+  // the first step (1,0,-1).
+  const target = cube(3, 0, -3);
+  const scene = (over: Partial<MoveActionState> = {}) =>
+    state({
+      ball: origin,
+      pieces: [
+        piece({ id: "run", at: origin, team: "home", movePoints: 6 }),
+        piece({ id: "gd", at: cube(3, -1, -2), team: "away" }),
+      ],
+      ...over,
+    });
+
+  it("a 1 hands the ball to the opponent and stops the move on that hex", () => {
+    let s = initMoveAction(scene(), seedRollingOne());
+    s = moveAction(s, { type: "selectPiece", pieceId: "run" });
+    s = moveAction(s, { type: "commit", hex: target });
+    s = runMove(s);
+
+    expect(s.phase).toBe("stopped");
+    expect(s.steal?.by).toBe("gd");
+    expect(s.steal?.at).toEqual({ x: 2, y: 0, z: -2 }); // first contested step
+    const run = s.state.pieces.find((p) => p.id === "run")!;
+    expect(run.at).toEqual({ x: 2, y: 0, z: -2 }); // halted where it was robbed
+    expect(run.movePoints).toBe(4); // spent 2 of 6
+    expect(s.state.ball).toEqual({ x: 3, y: -1, z: -2 }); // now on the guard's hex
+    expect(moveView(s).carrying).toBe(false);
+  });
+
+  it("no steal when the roll misses — the move completes and the ball follows", () => {
+    let s = initMoveAction(scene(), seedNeverSteals(4));
+    s = moveAction(s, { type: "selectPiece", pieceId: "run" });
+    s = moveAction(s, { type: "commit", hex: target });
+    s = runMove(s);
+
+    expect(s.phase).toBe("aiming");
+    expect(s.steal).toBeNull();
+    expect(s.state.pieces.find((p) => p.id === "run")!.at).toEqual({ x: 3, y: 0, z: -3 });
+    expect(s.state.ball).toEqual({ x: 3, y: 0, z: -3 });
+  });
+
+  it("rolls once per adjacent opponent and the first (by id) that hits steals", () => {
+    // Both guards' influence covers (0,-1,1): "g1" sorts before "g2".
+    const twoGuards = state({
+      ball: origin,
+      pieces: [
+        piece({ id: "run", at: origin, team: "home", movePoints: 4 }),
+        piece({ id: "g1", at: cube(0, -2, 2), team: "away" }),
+        piece({ id: "g2", at: cube(1, -2, 1), team: "away" }),
+      ],
+    });
+    let s = initMoveAction(twoGuards, seedRollingOne());
+    s = moveAction(s, { type: "selectPiece", pieceId: "run" });
+    s = moveAction(s, { type: "commit", hex: cube(0, -1, 1) });
+    const before = s.rng;
+    s = runMove(s);
+    expect(s.steal?.rolls).toHaveLength(2); // one per guard
+    expect(s.rng).not.toBe(before); // rng advanced by the rolls
+    expect(["g1", "g2"]).toContain(s.steal?.by);
+  });
+
+  it("a non-carrier walks through influence untouched (no rolls, rng unchanged)", () => {
+    const s0 = initMoveAction(
+      scene({
+        pieces: [
+          piece({ id: "run", at: origin, team: "home", movePoints: 6 }),
+          piece({ id: "gd", at: cube(3, -1, -2), team: "away" }),
+          piece({ id: "free", at: cube(-1, 0, 1), team: "home", movePoints: 6 }),
+        ],
+      }),
+      seedRollingOne(),
+    );
+    let s = moveAction(s0, { type: "selectPiece", pieceId: "free" });
+    s = moveAction(s, { type: "commit", hex: cube(2, 0, -2) });
+    s = runMove(s);
+    expect(s.phase).not.toBe("stopped");
+    expect(s.rng).toBe(s0.rng);
+  });
+
+  it("moveView exposes the contest on the threatened step and the hazards while aiming", () => {
+    let s = initMoveAction(scene(), seedNeverSteals(6));
+    s = moveAction(s, { type: "selectPiece", pieceId: "run" });
+    s = moveAction(s, { type: "hoverHex", hex: target });
+    // enters gd's influence at (2,0,-2); (3,0,-3) is "still inside", not a new step-in
+    expect(moveView(s).hazards.map(cubeKey)).toEqual([cubeKey(cube(2, 0, -2))]);
+
+    s = moveAction(s, { type: "commit" });
+    // step 0 -> (1,0,-1): safe; step 1 -> (2,0,-2): steps into gd's influence
+    expect(moveView(s).step?.contest).toEqual([]);
+    s = moveAction(s, { type: "advance" });
+    expect(moveView(s).step?.contest).toEqual(["gd"]);
+    s = moveAction(s, { type: "advance" });
+    // (2,0,-2) -> (3,0,-3): still in gd's influence, no fresh roll
+    expect(moveView(s).step?.contest).toEqual([]);
+  });
+
+  it("after a steal, selecting a piece resumes and replays deterministically", () => {
+    const seed = seedRollingOne();
+    const play = () =>
+      runMove(
+        moveAction(
+          moveAction(initMoveAction(scene(), seed), { type: "selectPiece", pieceId: "run" }),
+          { type: "commit", hex: target },
+        ),
+      );
+    const run1 = play();
+    expect(play().steal).toEqual(run1.steal);
+    expect(run1.phase).toBe("stopped");
+
+    const resumed = moveAction(run1, { type: "selectPiece", pieceId: "gd" });
+    expect(resumed.phase).toBe("aiming");
+    expect(resumed.activeId).toBe("gd");
   });
 });

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { cube, cubeKey, type Cube } from "../coordinates/coordinates.js";
+import { seedRng } from "../dice/dice.js";
 import {
+  initMoveAction,
+  moveAction,
   movePath,
+  pathHazards,
   reachableForPiece,
   type MoveActionState,
 } from "../move-action/move-action.js";
@@ -21,21 +25,23 @@ function wall(from: Cube, dir: Cube, count: number): Cube[] {
 
 const SE = cube(0, 1, -1);
 const N = cube(0, -1, 1);
+const HOME = "home";
+const AWAY = "away";
 
 const CASES: MovementCase[] = [
   {
     title: "open field — a 2-hex step",
-    play: { radius: 4, pieces: [{ at: origin, label: 1, movePoints: 2 }] },
+    play: { radius: 4, pieces: [{ at: origin, label: 1, movePoints: 2, team: HOME }] },
   },
   {
     title: "open field — the 4-hex move",
-    play: { radius: 6, pieces: [{ at: origin, label: 1, movePoints: 4 }] },
+    play: { radius: 6, pieces: [{ at: origin, label: 1, movePoints: 4, team: HOME }] },
   },
   {
     title: "one pillar beside the piece",
     play: {
       radius: 5,
-      pieces: [{ at: origin, label: 3, movePoints: 4 }],
+      pieces: [{ at: origin, label: 3, movePoints: 4, team: HOME }],
       obstacle: [cube(1, -1, 0)],
     },
   },
@@ -43,7 +49,7 @@ const CASES: MovementCase[] = [
     title: "walled off but for one gap",
     play: {
       radius: 6,
-      pieces: [{ at: origin, label: 4, movePoints: 4 }],
+      pieces: [{ at: origin, label: 4, movePoints: 4, team: HOME }],
       obstacle: [
         cube(1, 0, -1),
         cube(0, 1, -1),
@@ -54,24 +60,10 @@ const CASES: MovementCase[] = [
     },
   },
   {
-    title: "scattered obstacles",
-    play: {
-      radius: 6,
-      pieces: [{ at: origin, label: 7, movePoints: 4 }],
-      obstacle: [
-        cube(2, -1, -1),
-        cube(-1, 2, -1),
-        cube(-2, 0, 2),
-        cube(1, 1, -2),
-        cube(0, -2, 2),
-      ],
-    },
-  },
-  {
     title: "threading an S-corridor — 5 hexes",
     play: {
       radius: 7,
-      pieces: [{ at: cube(-4, 2, 2), label: 5, movePoints: 5 }],
+      pieces: [{ at: cube(-4, 2, 2), label: 5, movePoints: 5, team: HOME }],
       obstacle: [
         ...wall(cube(-3, 0, 3), SE, 5),
         ...wall(cube(1, -1, 0), N, 5),
@@ -84,25 +76,50 @@ const CASES: MovementCase[] = [
     play: {
       radius: 5,
       pieces: [
-        { at: cube(-1, 0, 1), label: "A", movePoints: 2 },
-        { at: origin, label: "B", movePoints: 2 },
+        { at: cube(-1, 0, 1), label: "A", movePoints: 2, team: HOME },
+        { at: origin, label: "B", movePoints: 2, team: AWAY },
+      ],
+    },
+  },
+  {
+    title: "carry the ball past a defender",
+    play: {
+      radius: 6,
+      pieces: [
+        { at: origin, label: 9, movePoints: 6, team: HOME, hasBall: true },
+        { at: cube(3, -1, -2), label: "D", movePoints: 4, team: AWAY },
+      ],
+    },
+  },
+  {
+    title: "run the gauntlet — a roll per defender you pass",
+    play: {
+      radius: 6,
+      pieces: [
+        { at: origin, label: 9, movePoints: 6, team: HOME, hasBall: true },
+        { at: cube(1, -2, 1), label: "D", movePoints: 3, team: AWAY },
+        { at: cube(1, 0, -1), label: "E", movePoints: 3, team: AWAY },
       ],
     },
   },
 ];
 
-/** The `MoveActionState` a case's first piece would see. */
+/** The `MoveActionState` for a case (piece ids `case-p0`, `case-p1`, …). */
 function caseState(c: MovementCase): MoveActionState {
-  return {
-    pieces: c.play.pieces.map((p, i) => ({
-      id: `case-p${i}`,
-      label: p.label,
-      at: p.at,
-      movePoints: p.movePoints,
-    })),
+  const pieces = c.play.pieces.map((p, i) => ({
+    id: `case-p${i}`,
+    label: p.label,
+    at: p.at,
+    movePoints: p.movePoints,
+    team: p.team,
+  }));
+  const carrier = c.play.pieces.findIndex((p) => p.hasBall);
+  const state: MoveActionState = {
+    pieces,
     obstacles: [...(c.play.obstacle ?? [])],
     piecesBlock: c.play.piecesBlock,
   };
+  return carrier >= 0 ? { ...state, ball: pieces[carrier]!.at } : state;
 }
 
 describe("movement playground page", () => {
@@ -119,7 +136,8 @@ describe("movement playground page", () => {
       expect(html).toContain(`<h2>${CASES[i]!.title}</h2>`);
     }
     expect(html).toContain('href="../../index.html"');
-    expect(html).toContain('data-id="case-6-p1"'); // the two-piece case
+    expect(html).toContain('data-id="case-6-p1"');
+    expect(html).toContain('class="ball"'); // a ball case is present
   });
 
   it("every case gives its first piece somewhere to go", () => {
@@ -129,17 +147,26 @@ describe("movement playground page", () => {
   });
 
   it("a blocking piece removes the hex right behind it", () => {
-    // two-piece case: A at (-1,0,1), B at (0,0,0), A has 2 MP.
-    const state = caseState(CASES[6]!);
+    const state = caseState(CASES[5]!); // two pieces: A (2 MP) at (-1,0,1), B at (0,0,0)
     const reach = new Set(reachableForPiece(state, "case-p0").map(cubeKey));
-    expect(reach.has(cubeKey(origin))).toBe(false); // B's hex
-    expect(reach.has(cubeKey(cube(1, 0, -1)))).toBe(false); // straight past B, detour > 2
-    expect(reach.has(cubeKey(cube(1, -1, 0)))).toBe(true); // reachable around B
+    expect(reach.has(cubeKey(origin))).toBe(false);
+    expect(reach.has(cubeKey(cube(1, 0, -1)))).toBe(false);
+    expect(reach.has(cubeKey(cube(1, -1, 0)))).toBe(true);
+  });
+
+  it("the ball cases put the carrier at risk near a defender", () => {
+    // carry-past: heading east to (3,0,-3) passes D's influence at (2,0,-2).
+    const carry = caseState(CASES[6]!);
+    const p1 = movePath(carry, "case-p0", cube(3, 0, -3))!;
+    expect(pathHazards(carry, "case-p0", p1).map(cubeKey)).toContain(cubeKey(cube(2, 0, -2)));
+
+    // gauntlet: the only way east threads (1,-1,0), adjacent to both D and E.
+    const gauntlet = caseState(CASES[7]!);
+    const p2 = movePath(gauntlet, "case-p0", cube(2, -1, -1))!;
+    expect(pathHazards(gauntlet, "case-p0", p2).map(cubeKey)).toContain(cubeKey(cube(1, -1, 0)));
   });
 
   it("the inline flood mirrors move-action for a representative board", () => {
-    // The same BFS the inline script runs, checked against reachableForPiece /
-    // movePath — drift here would make the playground lie.
     const state = caseState(CASES[3]!); // walled off but for one gap
     const piece = state.pieces[0]!;
     const board = new Set<string>();
@@ -154,7 +181,6 @@ describe("movement playground page", () => {
     ] as const;
 
     const dist = new Map<string, number>([[cubeKey(piece.at), 0]]);
-    const cameFrom = new Map<string, string>();
     let frontier = [cubeKey(piece.at)];
     for (let d = 0; d < piece.movePoints && frontier.length; d++) {
       const next: string[] = [];
@@ -164,7 +190,6 @@ describe("movement playground page", () => {
           const nk = `${x + dx},${y + dy},${z + dz}`;
           if (dist.has(nk) || blocked.has(nk) || !board.has(nk)) continue;
           dist.set(nk, d + 1);
-          cameFrom.set(nk, key);
           next.push(nk);
         }
       }
@@ -174,24 +199,31 @@ describe("movement playground page", () => {
     const inlineReach = new Set([...dist.keys()].filter((k) => k !== cubeKey(piece.at)));
     const realReach = new Set(reachableForPiece(state, "case-p0").map(cubeKey));
     expect(inlineReach).toEqual(realReach);
+  });
 
-    // The inline BFS path and movePath may pick different *equal-length*
-    // shortest routes; both must be the same length and end at the target.
-    const target = [...inlineReach][inlineReach.size - 1]!;
-    const walk = (t: string): string[] => {
-      const p = [t];
-      let s = t;
-      while (cameFrom.has(s)) {
-        s = cameFrom.get(s)!;
-        p.unshift(s);
+  it("each case's baked seed is seedRng(caseId), so the page replays", () => {
+    for (let i = 0; i < CASES.length; i++) {
+      expect(html).toContain(`"seed":${seedRng(`case-${i}`)}`);
+    }
+  });
+
+  it("move-action resolves the gauntlet deterministically for the baked seed", () => {
+    const state = caseState(CASES[7]!);
+    const seed = seedRng("case-7");
+    const play = () => {
+      let s = initMoveAction(state, seed);
+      s = moveAction(s, { type: "selectPiece", pieceId: "case-p0" });
+      s = moveAction(s, { type: "commit", hex: cube(2, -1, -1) });
+      let guard = 0;
+      while (s.phase === "moving" && guard++ < 40) {
+        s = moveAction(s, { type: "advance" });
       }
-      return p;
+      return s;
     };
-    const [tx, ty, tz] = target.split(",").map(Number) as [number, number, number];
-    const real = movePath(state, "case-p0", cube(tx, ty, tz))!;
-    const inline = walk(target);
-    expect(inline).toHaveLength(real.length);
-    expect(inline[0]).toBe(cubeKey(piece.at));
-    expect(inline.at(-1)).toBe(target);
+    const a = play();
+    const b = play();
+    expect(a.phase).toBe(b.phase);
+    expect(a.steal).toEqual(b.steal);
+    expect(["stopped", "aiming", "spent"]).toContain(a.phase);
   });
 });

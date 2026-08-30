@@ -17,6 +17,8 @@ export type {
   ArrowWeight,
 } from "./arrow/arrow.js";
 export { hexArrow } from "./arrow/arrow.js";
+export type { Rng } from "./dice/dice.js";
+export { nextRandom, rollDice, rollDie, seedRng } from "./dice/dice.js";
 export { cubeDistance } from "./distance/distance.js";
 export type { Pixel } from "./layout/layout.js";
 export {
@@ -33,16 +35,22 @@ export type {
   MoveActionView,
   MoveArrow,
   MovePhase,
+  MoveStep,
   Piece,
+  StealOutcome,
 } from "./move-action/move-action.js";
 export {
   applyMove,
+  ballCarrier,
   blockersFor,
+  enteredInfluence,
+  influencers,
   initMoveAction,
   moveAction,
   moveArrow,
   movePath,
   moveView,
+  pathHazards,
   reachableForPiece,
 } from "./move-action/move-action.js";
 export type {

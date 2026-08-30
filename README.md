@@ -33,6 +33,7 @@ One folder per utility, holding its impl, unit test, and visual test:
 ```
 src/
   coordinates/    Cube type, constructor, validation, vector math, directions
+  dice/           seeded PRNG — seedRng / rollDie / rollDice, fully replayable
   distance/       cubeDistance — step count between two hexes
   layout/         cubeToPixel / pixelToCube / cubeRound — pointy-top pixel map
   movement/       reachableCubes — BFS flood fill within a step budget
@@ -48,12 +49,17 @@ src/
 
 `move-action` is the first **action** — it composes the utilities into "pick a
 piece, see where it can go, aim, walk it there". Either call the pieces directly
-(`reachableForPiece`, `movePath`, `moveArrow`, `applyMove`) or feed the event
-reducer (`initMoveAction` / `moveAction(snap, event)` / `moveView`) UI events
-(`selectPiece`, `hoverHex`, `commit`, `advance`, `cancel`) and let it walk
-`idle → aiming → moving → spent`. `moveView().step` hands you one hex segment at
-a time, so the piece steps through every hex of the path, not start-to-end. Pure;
-no DOM, no timers, no rendering. See `docs/move-action.md`.
+(`reachableForPiece`, `movePath`, `moveArrow`, `pathHazards`, `applyMove`) or
+feed the event reducer (`initMoveAction` / `moveAction(snap, event)` /
+`moveView`) UI events (`selectPiece`, `hoverHex`, `commit`, `advance`, `cancel`)
+and let it walk `idle → aiming → moving → (spent | stopped)`. `moveView().step`
+hands you one hex segment at a time, so the piece steps through every hex of the
+path, not start-to-end. If the **ball carrier** *steps into* an opponent's
+influence (a hex next to an enemy piece — not merely staying in it) a `d6` is
+rolled per opponent freshly entered; a `1` and the ball changes hands and the
+move ends (`stopped`). Rolls come from the seeded `dice` PRNG in the snapshot,
+so a game replays. Pure; no DOM, no timers, no rendering. See
+`docs/move-action.md`.
 
 `cubeToPixel(c, size?)` / `pixelToCube(px, py, size?)` are the one pointy-top
 layout map (`px = size·√3·(x + z/2)`, `py = size·1.5·z`, default `size` 26) —
@@ -113,10 +119,12 @@ aggregating across the parallel vitest workers.
 **Actions** are interactive single-page playgrounds:
 
 - `actions/movement/index.html` — click a piece to select it, hover a reachable
-  hex for the dashed move arrow, click to walk the piece through every hex of the
-  path; obstacles and other pieces block. The inline script mirrors the
-  `move-action` reducer. Authored in `src/movement/movement.playground.test.ts`;
-  see `docs/move-action.md` and `docs/movement-playground.md`.
+  hex for the move arrow, click to walk it through every hex of the path;
+  obstacles and other pieces block. Ball cases add teams + a stealable ball:
+  hovering a route past a defender pulses the risky hexes red and the carrier
+  shivers, and walking it rolls the steal check. `reset` re-rolls the seed. The
+  inline script mirrors the `move-action` reducer. Authored in
+  `src/movement/movement.playground.test.ts`; see `docs/move-action.md`.
 - `actions/move-piece/index.html` — click a hex to send the pieces (player disc,
   striped ball) there via `movePiece`; toggle ground / jump. Long moves stay
   snappy (they accelerate); a jump zooms up over the gap. Authored in
@@ -138,13 +146,14 @@ Shared test-only code is in `src/test-utils/` (`scenario.ts`, `board.ts`,
 ### Planned utilities
 
 - ~~`distance`~~ — cube distance between two hexes *(done)*
+- ~~`dice`~~ — seeded, replayable dice rolls *(done)*
 - `neighbors` — adjacent hexes (via `CUBE_DIRECTIONS`)
 - `range` / `ring` / `spiral` — hexes within N steps
 - ~~`pixel-range`~~ — hexes whose centre falls in a pixel circle *(done)*
 - ~~`line-coverage`~~ — every hex a centre-to-centre segment crosses (supercover) *(done)*
 - ~~`arrow`~~ — styled SVG arrow: route through hex centres, or a 2-hex jump arc *(done)*
 - ~~`move-piece`~~ — constant-speed hex→hex animation plan, ground slide or zooming jump *(done)*
-- ~~`move-action`~~ — the movement action: reachable + aim + walk, direct fns or event reducer *(done)*
+- ~~`move-action`~~ — the movement action: reachable + aim + walk + ball-steal, direct fns or event reducer *(done)*
 - `line` — single-width hexes on a straight line (lerp + cube rounding)
 - `rotate` / `reflect` — symmetry operations
 - ~~`pathfind`~~ — shortest obstacle-free hex path via A* *(done)*
