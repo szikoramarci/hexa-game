@@ -32,6 +32,8 @@ export interface PlaygroundPiece {
   team: string;
   /** Marks the ball carrier. At most one piece per board. */
   hasBall?: boolean;
+  /** Contest attributes; missing ones fall back to `defaultAttr`. */
+  attrs?: { dribbling?: number; tackling?: number };
 }
 
 /** One board on the movement page. */
@@ -48,6 +50,8 @@ export interface MovementPlayground {
   stealDie?: number;
   /** A steal-check roll at or below this takes the ball. Default 1. */
   stealOn?: number;
+  /** Attribute value used when a piece omits one. Default 3. */
+  defaultAttr?: number;
 }
 
 /** One titled case on the movement page. */
@@ -74,6 +78,7 @@ interface CaseData {
   ball: string | null;
   stealDie: number;
   stealOn: number;
+  defaultAttr: number;
   seed: number;
   pieces: {
     id: string;
@@ -81,6 +86,7 @@ interface CaseData {
     label: string;
     movePoints: number;
     team: string;
+    attrs: { dribbling?: number; tackling?: number };
   }[];
 }
 
@@ -139,6 +145,7 @@ function renderCase(
     team: piece.team,
     color: teamColor(piece.team),
     hasBall: piece.hasBall === true,
+    attrs: piece.attrs ?? {},
   }));
 
   const carrier = pieces.find((piece) => piece.hasBall) ?? null;
@@ -172,13 +179,15 @@ function renderCase(
     ball: carrier ? carrier.at : null,
     stealDie: p.stealDie ?? 6,
     stealOn: p.stealOn ?? 1,
+    defaultAttr: p.defaultAttr ?? 3,
     seed: seedRng(`${id}`),
-    pieces: pieces.map(({ id: pid, at, label, movePoints, team }) => ({
+    pieces: pieces.map(({ id: pid, at, label, movePoints, team, attrs }) => ({
       id: pid,
       at,
       label,
       movePoints,
       team,
+      attrs,
     })),
   };
 
@@ -192,7 +201,8 @@ function renderCase(
     ballEl +
     `\n      </svg>\n` +
     `      <div class="hud"><span class="status"></span>` +
-    `<button class="reset" type="button">reset</button></div>\n` +
+    `<span class="hud-btns"><button class="stay" type="button" hidden>stay</button>` +
+    `<button class="reset" type="button">reset</button></span></div>\n` +
     `    </section>`;
 
   return { section, data };
@@ -212,9 +222,13 @@ const CASES_CSS = `
   .hex.hazard { stroke: ${COLOR.danger}; stroke-width: 3;
     animation: haz 1s ease-in-out infinite; }
   @keyframes haz { 0%,100% { stroke-opacity: .3 } 50% { stroke-opacity: 1 } }
+  .hex.relo { fill: #bfe6c4; cursor: pointer; }
+  .hex.relo:hover { fill: #93d79c; }
   .arrow-layer { pointer-events: none; }
   .piece { cursor: pointer; transition: transform ${STEP_MS}ms linear; }
   .piece.selected { filter: drop-shadow(0 0 3px #1560c4); }
+  .piece.tackle-target { filter: drop-shadow(0 0 3px ${COLOR.danger})
+    drop-shadow(0 0 3px ${COLOR.danger}); cursor: crosshair; }
   .piece.dim { opacity: .5; }
   .piece .marker { transition: transform .1s; }
   .piece.wary .marker { animation: wary .16s linear infinite; }
@@ -228,7 +242,9 @@ const CASES_CSS = `
   .hud { display: flex; align-items: center; justify-content: space-between;
     gap: .75rem; margin-top: .5rem; font-size: .8rem; color: #666; }
   .hud .status.stolen { color: ${COLOR.danger}; font-weight: 700; }
-  .reset { font: inherit; padding: .1rem .55rem; cursor: pointer; }`;
+  .hud .status.won { color: #1560c4; font-weight: 700; }
+  .hud-btns { display: flex; gap: .4rem; flex: none; }
+  .reset, .stay { font: inherit; padding: .1rem .55rem; cursor: pointer; }`;
 
 /**
  * The live layer, once per page. `initCase(section, DATA)` mirrors
@@ -236,14 +252,23 @@ const CASES_CSS = `
  * `idle → aiming → moving → (stopped | spent)` reducer over the same events,
  * including the ball-steal check: a carrier stepping into an opponent's
  * influence rolls a `d6` per opponent (seeded `mulberry32`, matching
- * `src/dice`), and a `1` ends the move and hands over the ball. Kept honest by
- * the playground test's cross-check against the real modules. No backticks /
- * `${` so it embeds verbatim.
+ * `src/dice`), and a `1` ends the move and hands over the ball.
+ *
+ * It also mirrors the **tackle**: a selected defender that can reach the enemy
+ * carrier's hex clicks it to lunge (`tackling`), spends all its move points, and
+ * a `d6 + tackling` vs `d6 + dribbling` challenge (`resolveChallenge`) decides
+ * the ball. A defender `1` is a foul and equal scores a loose ball — both dead
+ * ends, ball unchanged (TODO). The winner's controller then clicks a green hex
+ * to `relocate` the carrying piece, or `stay` to keep the fallback spot.
+ *
+ * Kept honest by the playground test's cross-check against the real modules. No
+ * backticks / `${` so it embeds verbatim.
  */
 const SCRIPT = [
   "var DIRS = [[1,-1,0],[1,0,-1],[0,1,-1],[-1,1,0],[-1,0,1],[0,-1,1]];",
   "var STEP_MS = " + STEP_MS + ";",
   "var ARROW = '" + COLOR.arrow + "';",
+  "var DANGER = '" + COLOR.danger + "';",
   "function parse(k) { return k.split(',').map(Number); }",
   "function neighbours(key) {",
   "  var p = parse(key);",
@@ -261,6 +286,13 @@ const SCRIPT = [
   "  return [((t ^ (t >>> 14)) >>> 0) / 4294967296, a];",
   "}",
   "function rollDie(s, sides) { var r = nextRandom(s); return [Math.floor(r[0]*sides)+1, r[1]]; }",
+  "// generic d6+attr contest, mirrors resolveChallenge (attacker rolls first)",
+  "function resolveChallenge(s, attA, defA, die) {",
+  "  var a = rollDie(s, die), d = rollDie(a[1], die);",
+  "  var as = a[0] + attA, ds = d[0] + defA, tie = as === ds;",
+  "  return { attackerRoll: a[0], defenderRoll: d[0], attackerScore: as, defenderScore: ds,",
+  "           tie: tie, winner: tie ? null : (as > ds ? 'attacker' : 'defender'), rng: d[1] };",
+  "}",
   "",
   "function initCase(section, DATA) {",
   "  var SIZE = DATA.size;",
@@ -270,6 +302,7 @@ const SCRIPT = [
   "  var arrowLayer = svg.querySelector('.arrow-layer');",
   "  var ballEl = svg.querySelector('.ball');",
   "  var statusEl = section.querySelector('.status');",
+  "  var stayBtn = section.querySelector('.stay');",
   "  var hexEls = new Map();",
   "  svg.querySelectorAll('.hex').forEach(function (el) { hexEls.set(el.dataset.key, el); });",
   "  var pieceEls = new Map();",
@@ -283,12 +316,15 @@ const SCRIPT = [
   "  // --- game state (mirrors MoveActionState) ---",
   "  var pieces = DATA.pieces.map(function (p) {",
   "    return { id: p.id, at: p.at, label: p.label, movePoints: p.movePoints,",
-  "             team: p.team, home: p.at, homeMP: p.movePoints };",
+  "             team: p.team, attrs: p.attrs || {}, home: p.at, homeMP: p.movePoints };",
   "  });",
   "  var ball = DATA.ball;",
   "  var rng = DATA.seed | 0;",
   "  function piece(id) { return pieces.filter(function (p) { return p.id === id; })[0]; }",
   "  function ballCarrier() { return ball ? pieces.filter(function (p) { return p.at === ball; })[0] || null : null; }",
+  "  function attrOf(p, key) {",
+  "    return (p.attrs && p.attrs[key] != null) ? p.attrs[key] : (DATA.defaultAttr != null ? DATA.defaultAttr : 3);",
+  "  }",
   "  function influencers(hex, team) {",
   "    return pieces.filter(function (p) { return p.team !== team && cubeDist(p.at, hex) === 1; })",
   "      .sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });",
@@ -327,17 +363,78 @@ const SCRIPT = [
   "    while (tree.cameFrom.has(step)) { step = tree.cameFrom.get(step); path.unshift(step); }",
   "    return path;",
   "  }",
+  "  function freeNeighbours(hex) {",
+  "    var occ = new Set(obstacles);",
+  "    pieces.forEach(function (p) { occ.add(p.at); });",
+  "    return neighbours(hex).filter(function (k) { return !occ.has(k) && board.has(k); });",
+  "  }",
+  "  // mirrors reachTackle: route onto the carrier hex, carrier allowed last only",
+  "  function reachTackle(defId) {",
+  "    var def = piece(defId), carrier = ballCarrier();",
+  "    if (!carrier || carrier.team === def.team) return null;",
+  "    var blocked = blockersFor(defId); blocked.delete(carrier.at);",
+  "    var dist = new Map([[def.at, 0]]), cameFrom = new Map(), frontier = [def.at];",
+  "    for (var d = 0; d < def.movePoints && frontier.length; d++) {",
+  "      var next = [];",
+  "      for (var i = 0; i < frontier.length; i++) {",
+  "        var ns = neighbours(frontier[i]);",
+  "        for (var j = 0; j < ns.length; j++) {",
+  "          var nk = ns[j];",
+  "          if (dist.has(nk) || blocked.has(nk) || !board.has(nk)) continue;",
+  "          dist.set(nk, d + 1); cameFrom.set(nk, frontier[i]);",
+  "          if (nk !== carrier.at) next.push(nk);",
+  "        }",
+  "      }",
+  "      frontier = next;",
+  "    }",
+  "    if (!dist.has(carrier.at)) return null;",
+  "    var path = [carrier.at], step = carrier.at;",
+  "    while (cameFrom.has(step)) { step = cameFrom.get(step); path.unshift(step); }",
+  "    if (path.length - 1 > def.movePoints) return null;",
+  "    return { path: path, start: path[0], approachEnd: path[path.length - 2], carrierId: carrier.id };",
+  "  }",
+  "  function relocationOptions(o) {",
+  "    if (!o || o.winner === null) return [];",
+  "    if (o.winner === 'defender') { var att = piece(o.attackerId); return att ? freeNeighbours(att.at) : []; }",
+  "    return freeNeighbours(o.approachEnd);",
+  "  }",
+  "  function applyTackle(o, dest) {",
+  "    if (o.winner === null) return;",
+  "    var winnerId = o.winner === 'defender' ? o.defenderId : o.attackerId;",
+  "    var fallback = o.winner === 'defender' ? o.start : o.at;",
+  "    var target = dest || fallback;",
+  "    piece(winnerId).at = target; ball = target;",
+  "  }",
   "",
   "  // --- snapshot (mirrors MoveActionSnapshot) ---",
-  "  var snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0, steal: null };",
+  "  function idle() { return { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0, steal: null, outcome: null }; }",
+  "  var snap = idle();",
   "  var tree = null;",
   "  function aimingPhase(p) { return p.movePoints > 0 ? 'aiming' : 'spent'; }",
   "",
+  "  function resolveTackle() {",
+  "    var def = piece(snap.activeId), carrier = ballCarrier();",
+  "    var path = snap.path;",
+  "    var approachEnd = path[path.length - 2], start = path[0], at = carrier.at;",
+  "    var roll = resolveChallenge(rng, attrOf(carrier, 'dribbling'), attrOf(def, 'tackling'), DATA.stealDie);",
+  "    rng = roll.rng;",
+  "    var foul = roll.defenderRoll === 1;",
+  "    def.at = approachEnd; def.movePoints = 0;",
+  "    var outcome = { defenderId: def.id, attackerId: carrier.id, at: at, start: start,",
+  "                    approachEnd: approachEnd, roll: roll, foul: foul,",
+  "                    winner: foul ? null : roll.winner };",
+  "    var base = { activeId: def.id, target: null, path: [], stepIndex: 0, steal: null, outcome: outcome };",
+  "    if (foul) { snap = Object.assign({ phase: 'foul' }, base); return; }",
+  "    if (roll.tie) { snap = Object.assign({ phase: 'looseBall' }, base); return; }",
+  "    ball = roll.winner === 'defender' ? approachEnd : at;",
+  "    snap = Object.assign({ phase: 'relocating' }, base);",
+  "  }",
+  "",
   "  function dispatch(ev) {",
   "    if (ev.type === 'selectPiece') {",
-  "      if (snap.phase === 'moving') return;",
+  "      if (snap.phase === 'moving' || snap.phase === 'tackling' || snap.phase === 'relocating') return;",
   "      var p = piece(ev.pieceId); if (!p) return;",
-  "      snap = { phase: aimingPhase(p), activeId: p.id, target: null, path: [], stepIndex: 0, steal: null };",
+  "      snap = { phase: aimingPhase(p), activeId: p.id, target: null, path: [], stepIndex: 0, steal: null, outcome: null };",
   "      tree = flood(p.id);",
   "    } else if (ev.type === 'hoverHex') {",
   "      if (snap.phase !== 'aiming') return;",
@@ -350,7 +447,26 @@ const SCRIPT = [
   "      var route = pathTo(tree, hex);",
   "      if (!route || route.length < 2) return;",
   "      snap.phase = 'moving'; snap.target = hex; snap.path = route; snap.stepIndex = 0; snap.steal = null;",
+  "    } else if (ev.type === 'tackle') {",
+  "      if (snap.phase !== 'aiming' || !snap.activeId) return;",
+  "      var reach = reachTackle(snap.activeId); var c = ballCarrier();",
+  "      if (!reach || !c) return;",
+  "      snap = { phase: 'tackling', activeId: snap.activeId, target: c.at, path: reach.path,",
+  "               stepIndex: 0, steal: null, outcome: null };",
+  "    } else if (ev.type === 'relocate') {",
+  "      if (snap.phase !== 'relocating' || !snap.outcome) return;",
+  "      if (relocationOptions(snap.outcome).indexOf(ev.hex) < 0) return;",
+  "      applyTackle(snap.outcome, ev.hex);",
+  "      snap = { phase: 'spent', activeId: snap.outcome.defenderId, target: null, path: [], stepIndex: 0, steal: null, outcome: null };",
+  "      tree = null;",
   "    } else if (ev.type === 'advance') {",
+  "      if (snap.phase === 'tackling') {",
+  "        var ti = snap.stepIndex + 1;",
+  "        if (!snap.path[ti]) return;",
+  "        if (ti < snap.path.length - 1) { snap.stepIndex = ti; return; }",
+  "        resolveTackle();",
+  "        return;",
+  "      }",
   "      if (snap.phase !== 'moving') return;",
   "      var i = snap.stepIndex + 1;",
   "      var hex2 = snap.path[i];",
@@ -370,7 +486,7 @@ const SCRIPT = [
   "            mover.at = hex2; mover.movePoints -= i;",
   "            ball = piece(by).at;",
   "            snap = { phase: 'stopped', activeId: snap.activeId, target: null, path: [], stepIndex: 0,",
-  "                     steal: { by: by, at: hex2, rolls: rolls } };",
+  "                     steal: { by: by, at: hex2, rolls: rolls }, outcome: null };",
   "            return;",
   "          }",
   "        }",
@@ -382,11 +498,17 @@ const SCRIPT = [
   "      ap.at = snap.path[snap.path.length - 1];",
   "      ap.movePoints -= (snap.path.length - 1);",
   "      if (wasCarrier) ball = ap.at;",
-  "      snap = { phase: aimingPhase(ap), activeId: ap.id, target: null, path: [], stepIndex: 0, steal: null };",
+  "      snap = { phase: aimingPhase(ap), activeId: ap.id, target: null, path: [], stepIndex: 0, steal: null, outcome: null };",
   "      tree = flood(ap.id);",
   "    } else if (ev.type === 'cancel') {",
-  "      if (snap.phase === 'moving') return;",
-  "      snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0, steal: null };",
+  "      if (snap.phase === 'moving' || snap.phase === 'tackling') return;",
+  "      if (snap.phase === 'relocating' && snap.outcome) {",
+  "        applyTackle(snap.outcome, null);",
+  "        snap = { phase: 'spent', activeId: snap.outcome.defenderId, target: null, path: [], stepIndex: 0, steal: null, outcome: null };",
+  "        tree = null;",
+  "        return;",
+  "      }",
+  "      snap = idle();",
   "      tree = null;",
   "    }",
   "  }",
@@ -400,7 +522,7 @@ const SCRIPT = [
   "    var poly = svgEl('polyline');",
   "    poly.setAttribute('points', pts.map(function (q) { return q.x.toFixed(2)+','+q.y.toFixed(2); }).join(' '));",
   "    poly.setAttribute('fill', 'none');",
-  "    poly.setAttribute('stroke', danger ? '" + COLOR.danger + "' : ARROW);",
+  "    poly.setAttribute('stroke', danger ? DANGER : ARROW);",
   "    poly.setAttribute('stroke-width', (SIZE * 0.16).toFixed(2));",
   "    poly.setAttribute('stroke-linecap', 'round');",
   "    poly.setAttribute('stroke-linejoin', 'round');",
@@ -417,7 +539,7 @@ const SCRIPT = [
   "      (bx - uy*hw).toFixed(2)+','+(by + ux*hw).toFixed(2),",
   "      (bx + uy*hw).toFixed(2)+','+(by - ux*hw).toFixed(2)",
   "    ].join(' '));",
-  "    head.setAttribute('fill', danger ? '" + COLOR.danger + "' : ARROW);",
+  "    head.setAttribute('fill', danger ? DANGER : ARROW);",
   "    arrowLayer.appendChild(head);",
   "  }",
   "  function placeAt(el, key, dx, dy) {",
@@ -428,6 +550,9 @@ const SCRIPT = [
   "  function render() {",
   "    var carrier = ballCarrier();",
   "    var carrying = carrier && snap.activeId != null && carrier.id === snap.activeId;",
+  "    var tk = (snap.phase === 'aiming' && snap.activeId) ? reachTackle(snap.activeId) : null;",
+  "    var relo = (snap.phase === 'relocating' && snap.outcome) ? relocationOptions(snap.outcome) : [];",
+  "    var reloSet = new Set(relo);",
   "    // hazards on the previewed path (aiming, carrier only)",
   "    var hazards = new Set();",
   "    if (snap.phase === 'aiming' && carrying) {",
@@ -438,14 +563,14 @@ const SCRIPT = [
   "    }",
   "    pieces.forEach(function (p) {",
   "      var el = pieceEls.get(p.id);",
-  "      var walking = snap.phase === 'moving' && p.id === snap.activeId;",
+  "      var walking = (snap.phase === 'moving' || snap.phase === 'tackling') && p.id === snap.activeId;",
   "      placeAt(el, walking ? snap.path[snap.stepIndex] : p.at);",
   "      el.classList.toggle('selected', p.id === snap.activeId);",
-  "      el.classList.toggle('dim', p.movePoints === 0 && p.id !== snap.activeId);",
-  "      el.classList.toggle('wary', p.id === snap.activeId && hazards.size > 0);",
-  "      el.classList.toggle('robbed', snap.steal != null && p.id === snap.activeId);",
+  "      el.classList.toggle('dim', p.movePoints === 0 && p.id !== snap.activeId && !(snap.outcome && snap.outcome.winner === 'attacker' && p.id === snap.outcome.attackerId));",
+  "      el.classList.toggle('wary', (p.id === snap.activeId && hazards.size > 0) || (tk && p.id === tk.carrierId));",
+  "      el.classList.toggle('robbed', (snap.steal != null && p.id === snap.activeId) || (snap.phase === 'foul' && snap.outcome && p.id === snap.outcome.defenderId));",
+  "      el.classList.toggle('tackle-target', tk != null && p.id === tk.carrierId);",
   "    });",
-  "    // ball follows its carrier (its current walking hex while moving)",
   "    if (ballEl) {",
   "      var bkey = ball;",
   "      if (snap.phase === 'moving' && carrier && carrier.id === snap.activeId) bkey = snap.path[snap.stepIndex];",
@@ -456,31 +581,45 @@ const SCRIPT = [
   "      tree.dist.forEach(function (d, key) { if (key !== tree.origin) reach.add(key); });",
   "    }",
   "    hexEls.forEach(function (el, key) {",
-  "      el.classList.toggle('reach', reach.has(key));",
+  "      el.classList.toggle('reach', reach.has(key) && !reloSet.has(key));",
   "      el.classList.toggle('hazard', hazards.has(key));",
+  "      el.classList.toggle('relo', reloSet.has(key));",
   "    });",
-  "    drawArrow(snap.path, hazards.size > 0);",
-  "    statusEl.classList.toggle('stolen', snap.phase === 'stopped');",
+  "    if (snap.phase === 'tackling') drawArrow(snap.path, true);",
+  "    else if (tk && snap.path.length < 2) drawArrow(tk.path, true);",
+  "    else drawArrow(snap.path, hazards.size > 0);",
+  "    statusEl.classList.toggle('stolen', snap.phase === 'stopped' || snap.phase === 'foul' || snap.phase === 'looseBall');",
+  "    statusEl.classList.toggle('won', snap.phase === 'relocating');",
+  "    stayBtn.hidden = snap.phase !== 'relocating';",
   "    if (snap.steal) {",
   "      var thief = piece(snap.steal.by);",
   "      statusEl.textContent = 'ball stolen by ' + thief.label + '  (rolled ' + snap.steal.rolls.join(', ') + ')';",
-  "    } else if (snap.phase === 'idle') statusEl.textContent = 'select a piece';",
+  "    } else if (snap.phase === 'foul') {",
+  "      statusEl.textContent = 'FOUL \\u2014 defender rolled 1 (handled separately \\u2014 TODO)';",
+  "    } else if (snap.phase === 'looseBall') {",
+  "      var lr = snap.outcome.roll;",
+  "      statusEl.textContent = 'loose ball \\u2014 scores level ' + lr.attackerScore + '\\u2013' + lr.defenderScore + ' (TODO)';",
+  "    } else if (snap.phase === 'relocating') {",
+  "      var o = snap.outcome, w = o.winner === 'defender' ? piece(o.defenderId) : piece(o.attackerId);",
+  "      statusEl.textContent = w.label + ' wins the challenge (' + o.roll.attackerScore + '\\u2013' + o.roll.defenderScore +",
+  "        ')  \\u00b7  ' + relo.length + ' hex' + (relo.length === 1 ? '' : 'es') + ' \\u2014 or stay';",
+  "    } else if (snap.phase === 'tackling') statusEl.textContent = 'tackling\\u2026';",
+  "    else if (snap.phase === 'idle') statusEl.textContent = 'select a piece';",
   "    else if (snap.phase === 'moving') statusEl.textContent = 'moving\\u2026';",
   "    else {",
   "      var ap = piece(snap.activeId);",
-  "      var note = carrying && hazards.size ? '  \\u26a0 ' + hazards.size + ' risky' : '';",
+  "      var note = carrying && hazards.size ? '  \\u26a0 ' + hazards.size + ' risky' : (tk ? '  \\u2014 click ' + piece(tk.carrierId).label + ' to tackle' : '');",
   "      statusEl.textContent = ap.label + ': ' + ap.movePoints + ' MP  \\u00b7  ' + reach.size + ' in reach' + note;",
   "    }",
   "  }",
   "",
-  "  // Walk the committed path hex by hex: one `advance` per tick, render()",
-  "  // slides the piece (and its ball) to the next hex.",
-  "  function runMove() {",
+  "  // Walk a committed path (moving or the tackle approach) hex by hex.",
+  "  function runWalk() {",
   "    (function stepOn() {",
-  "      if (snap.phase !== 'moving') { render(); return; }",
+  "      if (snap.phase !== 'moving' && snap.phase !== 'tackling') { render(); return; }",
   "      dispatch({ type: 'advance' });",
   "      render();",
-  "      if (snap.phase === 'moving') setTimeout(stepOn, STEP_MS);",
+  "      if (snap.phase === 'moving' || snap.phase === 'tackling') setTimeout(stepOn, STEP_MS);",
   "    })();",
   "  }",
   "",
@@ -488,24 +627,34 @@ const SCRIPT = [
   "    el.addEventListener('pointerenter', function () { dispatch({ type: 'hoverHex', hex: key }); render(); });",
   "    el.addEventListener('pointerleave', function () { dispatch({ type: 'hoverHex', hex: null }); render(); });",
   "    el.addEventListener('click', function () {",
+  "      if (snap.phase === 'relocating') { dispatch({ type: 'relocate', hex: key }); render(); return; }",
   "      if (snap.phase !== 'aiming') return;",
   "      dispatch({ type: 'commit', hex: key });",
-  "      if (snap.phase === 'moving') runMove(); else render();",
+  "      if (snap.phase === 'moving') runWalk(); else render();",
   "    });",
   "  });",
   "  pieceEls.forEach(function (el, id) {",
   "    el.addEventListener('click', function (e) {",
   "      e.stopPropagation();",
+  "      if (snap.phase === 'aiming' && snap.activeId) {",
+  "        var reach = reachTackle(snap.activeId), c = ballCarrier();",
+  "        if (reach && c && c.id === id) {",
+  "          dispatch({ type: 'tackle' }); render();",
+  "          if (snap.phase === 'tackling') runWalk();",
+  "          return;",
+  "        }",
+  "      }",
   "      dispatch({ type: 'selectPiece', pieceId: id });",
   "      render();",
   "    });",
   "  });",
+  "  stayBtn.addEventListener('click', function () { dispatch({ type: 'cancel' }); render(); });",
   "  section.querySelector('.reset').addEventListener('click', function () {",
-  "    if (snap.phase === 'moving') return;",
+  "    if (snap.phase === 'moving' || snap.phase === 'tackling') return;",
   "    pieces.forEach(function (p) { p.at = p.home; p.movePoints = p.homeMP; });",
   "    ball = DATA.ball;",
   "    rng = (Math.random() * 0x7fffffff) | 0;",
-  "    snap = { phase: 'idle', activeId: null, target: null, path: [], stepIndex: 0, steal: null };",
+  "    snap = idle();",
   "    tree = null;",
   "    render();",
   "  });",
@@ -538,8 +687,12 @@ export function writeMovementPlayground(
     `pick it up — reachable hexes turn blue. Hover one for the move arrow, click ` +
     `to walk there hex by hex. If the ball carrier steps beside an opponent ` +
     `(red pulsing hexes) a d6 is rolled per opponent — a <strong>1</strong> and ` +
-    `they take the ball and the move ends. <strong>reset</strong> re-rolls the ` +
-    `seed. Same reducer as <code>move-action</code>.</p>\n` +
+    `they take the ball and the move ends. A selected defender that can reach the ` +
+    `enemy carrier (glowing red) clicks it to <strong>tackle</strong>: it spends ` +
+    `all its move points and a d6 + tackling vs d6 + dribbling challenge decides ` +
+    `the ball. The winner clicks a green hex to reposition, or <strong>stay</strong>. ` +
+    `A defender 1 is a foul, level scores a loose ball — both TODO. ` +
+    `<strong>reset</strong> re-rolls the seed. Same reducer as <code>move-action</code>.</p>\n` +
     `  <div class="cases">\n` +
     rendered.map((r) => r.section).join("\n") +
     `\n  </div>\n` +

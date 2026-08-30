@@ -4,8 +4,10 @@ import { rollDie, seedRng } from "../dice/dice.js";
 import { reachableCubes } from "../movement/movement.js";
 import {
   applyMove,
+  applyTackle,
   ballCarrier,
   enteredInfluence,
+  freeNeighbours,
   influencers,
   initMoveAction,
   moveAction,
@@ -14,6 +16,12 @@ import {
   moveView,
   pathHazards,
   reachableForPiece,
+  reachTackle,
+  relocationOptions,
+  resolveChallenge,
+  tackleFoul,
+  tackleTarget,
+  type ChallengeRoll,
   type MoveActionSnapshot,
   type MoveActionState,
   type Piece,
@@ -434,5 +442,300 @@ describe("moveAction reducer — the ball steal", () => {
     const resumed = moveAction(run1, { type: "selectPiece", pieceId: "gd" });
     expect(resumed.phase).toBe("aiming");
     expect(resumed.activeId).toBe("gd");
+  });
+});
+
+// --- tackle --------------------------------------------------------------
+
+/** Carrier "att" on the ball at origin; defender "def" 2 hexes west with 3 MP. */
+const tackleScene = (over: Partial<MoveActionState> = {}): MoveActionState =>
+  state({
+    ball: origin,
+    pieces: [
+      piece({ id: "att", at: origin, team: "home", movePoints: 0 }),
+      piece({ id: "def", at: cube(2, -2, 0), team: "away", movePoints: 3 }),
+    ],
+    ...over,
+  });
+
+/** First seed whose 3-vs-3 challenge matches `pred`. */
+function seedFor(pred: (r: ChallengeRoll) => boolean, att = 3, def = 3): number {
+  for (let s = 1; s < 200_000; s++) {
+    if (pred(resolveChallenge(seedRng(s), att, def))) return s;
+  }
+  throw new Error("no seed matches");
+}
+
+const DEFENDER_WINS = seedFor((r) => r.winner === "defender" && r.defenderRoll !== 1);
+const ATTACKER_WINS = seedFor((r) => r.winner === "attacker" && r.defenderRoll !== 1);
+const FOUL = seedFor((r) => r.defenderRoll === 1);
+const TIE = seedFor((r) => r.tie && r.defenderRoll !== 1);
+
+function commitTackle(seed: number, over?: Partial<MoveActionState>): MoveActionSnapshot {
+  let s = initMoveAction(tackleScene(over), seed);
+  s = moveAction(s, { type: "selectPiece", pieceId: "def" });
+  s = moveAction(s, { type: "tackle" });
+  let guard = 0;
+  while (s.phase === "tackling" && guard++ < 50) s = moveAction(s, { type: "advance" });
+  return s;
+}
+
+const pieceAt = (s: MoveActionSnapshot, id: string) =>
+  s.state.pieces.find((p) => p.id === id)!;
+
+describe("freeNeighbours", () => {
+  it("is the six neighbours minus pieces and obstacles", () => {
+    const s = state({
+      obstacles: [cube(1, 0, -1)],
+      pieces: [piece({ id: "p1", at: cube(0, 1, -1) })],
+    });
+    const got = freeNeighbours(s, origin);
+    expect(got).toHaveLength(4);
+    expect(got.some((h) => cubeEquals(h, cube(1, 0, -1)))).toBe(false);
+    expect(got.some((h) => cubeEquals(h, cube(0, 1, -1)))).toBe(false);
+  });
+
+  it("is all six when nothing is in the way", () => {
+    expect(freeNeighbours(state({ pieces: [] }), cube(5, -5, 0))).toHaveLength(6);
+  });
+});
+
+describe("reachTackle / tackleTarget", () => {
+  it("routes onto the carrier's hex within move points", () => {
+    const reach = reachTackle(tackleScene(), "def")!;
+    expect(reach.path.map(cubeKey)).toEqual(
+      [cube(2, -2, 0), cube(1, -1, 0), origin].map(cubeKey),
+    );
+    expect(reach.start).toEqual({ x: 2, y: -2, z: 0 });
+    expect(reach.approachEnd).toEqual({ x: 1, y: -1, z: 0 });
+  });
+
+  it("is null when the carrier is out of budget", () => {
+    const s = tackleScene({
+      pieces: [
+        piece({ id: "att", at: origin, team: "home", movePoints: 0 }),
+        piece({ id: "def", at: cube(2, -2, 0), team: "away", movePoints: 1 }),
+      ],
+    });
+    expect(reachTackle(s, "def")).toBeNull();
+  });
+
+  it("only allows the carrier's hex as the final step, not a route through pieces", () => {
+    const s = tackleScene({
+      obstacles: [cube(1, 0, -1), cube(0, 1, -1), cube(-1, 1, 0), cube(-1, 0, 1), cube(0, -1, 1)],
+      pieces: [
+        piece({ id: "att", at: origin, team: "home", movePoints: 0 }),
+        piece({ id: "wall", at: cube(1, -1, 0), team: "home", movePoints: 0 }),
+        piece({ id: "def", at: cube(2, -2, 0), team: "away", movePoints: 3 }),
+      ],
+    });
+    expect(reachTackle(s, "def")).toBeNull(); // origin is walled off
+  });
+
+  it("works when the defender already stands next to the carrier", () => {
+    const s = tackleScene({
+      pieces: [
+        piece({ id: "att", at: origin, team: "home", movePoints: 0 }),
+        piece({ id: "def", at: cube(1, -1, 0), team: "away", movePoints: 2 }),
+      ],
+    });
+    const reach = reachTackle(s, "def")!;
+    expect(reach.path).toHaveLength(2);
+    expect(reach.approachEnd).toEqual(reach.start);
+  });
+
+  it("tackleTarget is the enemy carrier when reachable, else null", () => {
+    expect(tackleTarget(tackleScene(), "def")?.id).toBe("att");
+    // teammate carrier
+    const friendly = tackleScene({
+      pieces: [
+        piece({ id: "att", at: origin, team: "away", movePoints: 0 }),
+        piece({ id: "def", at: cube(2, -2, 0), team: "away", movePoints: 3 }),
+      ],
+    });
+    expect(tackleTarget(friendly, "def")).toBeNull();
+    // no ball
+    expect(tackleTarget(tackleScene({ ball: undefined }), "def")).toBeNull();
+  });
+});
+
+describe("resolveChallenge / tackleFoul", () => {
+  it("adds the attribute to each roll and the higher score wins", () => {
+    const r = resolveChallenge(seedRng(DEFENDER_WINS), 3, 3);
+    expect(r.attackerScore).toBe(r.attackerRoll + 3);
+    expect(r.defenderScore).toBe(r.defenderRoll + 3);
+    expect(r.winner).toBe("defender");
+  });
+
+  it("ties when the scores are equal", () => {
+    const r = resolveChallenge(seedRng(TIE), 3, 3);
+    expect(r.tie).toBe(true);
+    expect(r.winner).toBeNull();
+  });
+
+  it("rolls the attacker first, then the defender, advancing rng by two draws", () => {
+    const rng = seedRng(42);
+    const [a, r1] = rollDie(rng);
+    const [d, r2] = rollDie(r1);
+    const r = resolveChallenge(rng, 0, 0);
+    expect([r.attackerRoll, r.defenderRoll]).toEqual([a, d]);
+    expect(r.rng).toBe(r2);
+  });
+
+  it("a higher attribute flips an otherwise tied pair of rolls", () => {
+    const seed = seedFor((r) => r.attackerRoll === r.defenderRoll, 0, 0);
+    expect(resolveChallenge(seedRng(seed), 5, 1).winner).toBe("attacker");
+  });
+
+  it("tackleFoul is a defender roll of 1", () => {
+    expect(tackleFoul(1)).toBe(true);
+    expect(tackleFoul(2)).toBe(false);
+  });
+});
+
+describe("moveAction reducer — the tackle", () => {
+  it("offers the tackle while aiming and walks the approach on advance", () => {
+    let s = initMoveAction(tackleScene(), DEFENDER_WINS);
+    s = moveAction(s, { type: "selectPiece", pieceId: "def" });
+    expect(moveView(s).tackle?.carrierId).toBe("att");
+
+    s = moveAction(s, { type: "tackle" });
+    expect(s.phase).toBe("tackling");
+    s = moveAction(s, { type: "advance" }); // walk to the approach hex
+    expect(moveView(s).step?.contest).toEqual(["att"]); // the lunge
+    s = moveAction(s, { type: "advance" }); // lunge -> resolve
+    expect(s.phase).toBe("relocating");
+  });
+
+  it("is a no-op outside aiming or when the carrier is unreachable", () => {
+    const idle = initMoveAction(tackleScene());
+    expect(moveAction(idle, { type: "tackle" })).toBe(idle);
+
+    const far = tackleScene({
+      pieces: [
+        piece({ id: "att", at: origin, team: "home", movePoints: 0 }),
+        piece({ id: "def", at: cube(5, -5, 0), team: "away", movePoints: 3 }),
+      ],
+    });
+    let s = initMoveAction(far);
+    s = moveAction(s, { type: "selectPiece", pieceId: "def" });
+    expect(moveAction(s, { type: "tackle" })).toBe(s);
+  });
+
+  it("committing a tackle spends every remaining move point", () => {
+    for (const seed of [DEFENDER_WINS, ATTACKER_WINS, FOUL, TIE]) {
+      expect(pieceAt(commitTackle(seed), "def").movePoints).toBe(0);
+    }
+  });
+
+  it("defender wins: ball to the defender, relocation around the attacker", () => {
+    const s = commitTackle(DEFENDER_WINS);
+    expect(s.phase).toBe("relocating");
+    expect(ballCarrier(s.state)?.id).toBe("def");
+
+    const opts = moveView(s).relocation!;
+    expect(keys(opts)).toEqual(keys(freeNeighbours(s.state, origin)));
+    expect(opts.some((h) => cubeEquals(h, origin))).toBe(false);
+
+    const dest = opts[0]!;
+    const done = moveAction(s, { type: "relocate", hex: dest });
+    expect(done.phase).toBe("spent");
+    expect(pieceAt(done, "def").at).toEqual(dest);
+    expect(done.state.ball).toEqual(dest);
+    expect(pieceAt(done, "att").at).toEqual(origin); // attacker unmoved
+  });
+
+  it("defender wins: cancel returns the defender to where the tackle started", () => {
+    const s = commitTackle(DEFENDER_WINS);
+    const done = moveAction(s, { type: "cancel" });
+    expect(done.phase).toBe("spent");
+    expect(pieceAt(done, "def").at).toEqual({ x: 2, y: -2, z: 0 });
+    expect(done.state.ball).toEqual({ x: 2, y: -2, z: 0 });
+  });
+
+  it("ignores a relocate to a hex that is not on offer", () => {
+    const s = commitTackle(DEFENDER_WINS);
+    expect(moveAction(s, { type: "relocate", hex: cube(9, -9, 0) })).toBe(s);
+  });
+
+  it("attacker wins: ball stays with the attacker, relocation around the defender", () => {
+    const s = commitTackle(ATTACKER_WINS);
+    expect(s.phase).toBe("relocating");
+    expect(ballCarrier(s.state)?.id).toBe("att");
+    expect(pieceAt(s, "def").at).toEqual({ x: 1, y: -1, z: 0 }); // rests at approachEnd
+
+    const opts = moveView(s).relocation!;
+    expect(keys(opts)).toEqual(keys(freeNeighbours(s.state, cube(1, -1, 0))));
+
+    const dest = opts.find((h) => !cubeEquals(h, origin))!;
+    const done = moveAction(s, { type: "relocate", hex: dest });
+    expect(pieceAt(done, "att").at).toEqual(dest);
+    expect(done.state.ball).toEqual(dest);
+    expect(pieceAt(done, "def").at).toEqual({ x: 1, y: -1, z: 0 });
+  });
+
+  it("attacker wins: cancel leaves the attacker on its hex", () => {
+    const done = moveAction(commitTackle(ATTACKER_WINS), { type: "cancel" });
+    expect(done.phase).toBe("spent");
+    expect(pieceAt(done, "att").at).toEqual(origin);
+    expect(done.state.ball).toEqual(origin);
+  });
+
+  it("boxed in: no free hex around the defender leaves only cancel", () => {
+    // ring the approach hex (1,-1,0) with obstacles, keeping origin for the att
+    const ring = [cube(2, -2, 0), cube(2, -1, -1), cube(1, 0, -1), cube(0, -1, 1), cube(1, -2, 1)];
+    const s = commitTackle(ATTACKER_WINS, { obstacles: ring });
+    expect(moveView(s).relocation).toEqual([]);
+    expect(moveAction(s, { type: "relocate", hex: ring[0]! })).toBe(s);
+    const done = moveAction(s, { type: "cancel" });
+    expect(done.phase).toBe("spent");
+    expect(pieceAt(done, "att").at).toEqual(origin);
+  });
+
+  it("a defender 1 is a foul — dead end, ball untouched (TODO)", () => {
+    const s = commitTackle(FOUL);
+    expect(s.phase).toBe("foul");
+    expect(moveView(s).foul).toMatchObject({ attackerId: "att", defenderId: "def", at: origin });
+    expect(s.state.ball).toEqual(origin); // unchanged
+    expect(pieceAt(s, "def").movePoints).toBe(0);
+    // leave it
+    expect(moveAction(s, { type: "selectPiece", pieceId: "att" }).phase).toBe("spent");
+  });
+
+  it("a tie is a loose ball — dead end, ball untouched (TODO)", () => {
+    const s = commitTackle(TIE);
+    expect(s.phase).toBe("looseBall");
+    expect(moveView(s).looseBall).toMatchObject({ attackerId: "att", defenderId: "def" });
+    expect(s.state.ball).toEqual(origin);
+  });
+
+  it("replays a whole tackle from a fixed seed", () => {
+    const a = commitTackle(DEFENDER_WINS);
+    const b = commitTackle(DEFENDER_WINS);
+    expect(a.outcome).toEqual(b.outcome);
+    const relocated = (x: MoveActionSnapshot) =>
+      moveAction(x, { type: "relocate", hex: moveView(x).relocation![0]! });
+    expect(relocated(a).state.pieces).toEqual(relocated(b).state.pieces);
+  });
+
+  it("does not accept a new selection mid-tackle", () => {
+    let s = initMoveAction(tackleScene(), DEFENDER_WINS);
+    s = moveAction(s, { type: "selectPiece", pieceId: "def" });
+    s = moveAction(s, { type: "tackle" });
+    expect(moveAction(s, { type: "selectPiece", pieceId: "att" })).toBe(s);
+  });
+});
+
+describe("applyTackle", () => {
+  it("never mutates the input state", () => {
+    const s = commitTackle(DEFENDER_WINS);
+    const frozen = structuredClone(s.state);
+    applyTackle(s.state, s.outcome!, cube(1, 0, -1));
+    expect(s.state).toEqual(frozen);
+  });
+
+  it("relocationOptions is empty on a foul", () => {
+    const s = commitTackle(FOUL);
+    expect(relocationOptions(s.state, s.outcome!)).toEqual([]);
   });
 });

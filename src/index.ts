@@ -29,6 +29,7 @@ export {
 } from "./layout/layout.js";
 export { lineCoverageCubes } from "./line-coverage/line-coverage.js";
 export type {
+  ChallengeRoll,
   MoveActionEvent,
   MoveActionSnapshot,
   MoveActionState,
@@ -38,12 +39,16 @@ export type {
   MoveStep,
   Piece,
   StealOutcome,
+  TackleOutcome,
+  TackleReach,
 } from "./move-action/move-action.js";
 export {
   applyMove,
+  applyTackle,
   ballCarrier,
   blockersFor,
   enteredInfluence,
+  freeNeighbours,
   influencers,
   initMoveAction,
   moveAction,
@@ -52,6 +57,11 @@ export {
   moveView,
   pathHazards,
   reachableForPiece,
+  reachTackle,
+  relocationOptions,
+  resolveChallenge,
+  tackleFoul,
+  tackleTarget,
 } from "./move-action/move-action.js";
 export type {
   MoveFrame,

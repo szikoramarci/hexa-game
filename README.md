@@ -61,6 +61,14 @@ move ends (`stopped`). Rolls come from the seeded `dice` PRNG in the snapshot,
 so a game replays. Pure; no DOM, no timers, no rendering. See
 `docs/move-action.md`.
 
+A defender that can reach the enemy carrier's hex within its budget may
+`tackle` instead: it lunges (`tackling`), spends all its points, and a
+`d6 + tackling` vs `d6 + dribbling` challenge (`resolveChallenge`) decides the
+ball. A defender `1` is a foul, equal scores a loose ball — both left as `TODO`
+dead ends. The winner's controller then `relocate`s the carrying piece
+(`relocationOptions` — free hexes around the other player) or `cancel`s to the
+fallback spot. See `docs/tackle-action.md`.
+
 `cubeToPixel(c, size?)` / `pixelToCube(px, py, size?)` are the one pointy-top
 layout map (`px = size·√3·(x + z/2)`, `py = size·1.5·z`, default `size` 26) —
 the renderer, `hexArrow` and the playground all share it. `cubeRound` snaps a
@@ -122,9 +130,12 @@ aggregating across the parallel vitest workers.
   hex for the move arrow, click to walk it through every hex of the path;
   obstacles and other pieces block. Ball cases add teams + a stealable ball:
   hovering a route past a defender pulses the risky hexes red and the carrier
-  shivers, and walking it rolls the steal check. `reset` re-rolls the seed. The
-  inline script mirrors the `move-action` reducer. Authored in
-  `src/movement/movement.playground.test.ts`; see `docs/move-action.md`.
+  shivers, and walking it rolls the steal check. A selected defender that can
+  reach the enemy carrier (glowing red) clicks it to **tackle** — the challenge
+  resolves and the winner clicks a green hex to reposition, or **stay**. `reset`
+  re-rolls the seed. The inline script mirrors the `move-action` reducer,
+  tackle included. Authored in `src/movement/movement.playground.test.ts`; see
+  `docs/move-action.md` + `docs/tackle-action.md`.
 - `actions/move-piece/index.html` — click a hex to send the pieces (player disc,
   striped ball) there via `movePiece`; toggle ground / jump. Long moves stay
   snappy (they accelerate); a jump zooms up over the gap. Authored in
@@ -154,6 +165,7 @@ Shared test-only code is in `src/test-utils/` (`scenario.ts`, `board.ts`,
 - ~~`arrow`~~ — styled SVG arrow: route through hex centres, or a 2-hex jump arc *(done)*
 - ~~`move-piece`~~ — constant-speed hex→hex animation plan, ground slide or zooming jump *(done)*
 - ~~`move-action`~~ — the movement action: reachable + aim + walk + ball-steal, direct fns or event reducer *(done)*
+- ~~`tackle`~~ — defender lunge onto the carrier + `d6 + attr` challenge, folded into `move-action` (`resolveChallenge`, `reachTackle`, relocation); foul + loose ball are TODO *(done)*
 - `line` — single-width hexes on a straight line (lerp + cube rounding)
 - `rotate` / `reflect` — symmetry operations
 - ~~`pathfind`~~ — shortest obstacle-free hex path via A* *(done)*

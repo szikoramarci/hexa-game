@@ -1,4 +1,10 @@
-import { cubeEquals, type Cube } from "../coordinates/coordinates.js";
+import {
+  CUBE_DIRECTIONS,
+  cubeAdd,
+  cubeEquals,
+  cubeKey,
+  type Cube,
+} from "../coordinates/coordinates.js";
 import type { ArrowStyle } from "../arrow/arrow.js";
 import { cubeDistance } from "../distance/distance.js";
 import { rollDie, seedRng, type Rng } from "../dice/dice.js";
@@ -38,6 +44,11 @@ export interface Piece {
   movePoints: number;
   /** Which side the piece is on. Exactly two teams are in play. */
   team: string;
+  /**
+   * Contest attributes, integers `1..6` (see `docs/domain-model.md`). Missing
+   * ones fall back to {@link MoveActionState.defaultAttr}.
+   */
+  attrs?: { dribbling?: number; tackling?: number };
 }
 
 /** The slice of game state the movement action reads and writes. */
@@ -53,6 +64,8 @@ export interface MoveActionState {
   stealDie?: number;
   /** A steal-check roll at or below this takes the ball. Default `1`. */
   stealOn?: number;
+  /** Attribute value used when a {@link Piece} omits one. Default `3`. */
+  defaultAttr?: number;
 }
 
 /** An {@link ArrowStyle} plus the hexes to draw it through — feeds `hexArrow`. */
@@ -228,20 +241,214 @@ export function applyMove(
   };
 }
 
+// --- tackle --------------------------------------------------------------
+
+/** Value of `key` for `piece`, or the state default (`3`). */
+function attrOf(
+  state: MoveActionState,
+  piece: Piece,
+  key: "dribbling" | "tackling",
+): number {
+  return piece.attrs?.[key] ?? state.defaultAttr ?? 3;
+}
+
+/**
+ * The six neighbours of `hex` that hold no piece and no obstacle. Pitch bounds
+ * are not consulted (there is no pitch model yet). Reused for tackle relocation,
+ * and later for pass targets and loose-ball scatter.
+ */
+export function freeNeighbours(state: MoveActionState, hex: Cube): Cube[] {
+  const blocked = new Set(state.obstacles.map(cubeKey));
+  for (const p of state.pieces) blocked.add(cubeKey(p.at));
+  return CUBE_DIRECTIONS.map((d) => cubeAdd(hex, d)).filter(
+    (h) => !blocked.has(cubeKey(h)),
+  );
+}
+
+/** A defender's route onto the ball carrier's hex — the tackle approach. */
+export interface TackleReach {
+  /** `defender.at` … `carrier.at`, both ends included. */
+  path: Cube[];
+  /** `path[0]` — where the defender stands when the tackle is committed. */
+  start: Cube;
+  /** `path[path.length - 2]` — the hex the defender rests on to lunge. */
+  approachEnd: Cube;
+}
+
+/**
+ * Can `defenderId` reach the opposing ball carrier this action? The carrier's
+ * hex is allowed only as the **final** step; every other piece and obstacle
+ * blocks. `null` when there is no enemy carrier, it is a teammate, the route is
+ * blocked, or it is further than `movePoints` steps.
+ */
+export function reachTackle(
+  state: MoveActionState,
+  defenderId: string,
+  carrierId?: string,
+): TackleReach | null {
+  const defender = requirePiece(state, defenderId);
+  const carrier = carrierId
+    ? requirePiece(state, carrierId)
+    : ballCarrier(state);
+  if (!carrier || carrier.team === defender.team) return null;
+
+  const blockers = blockersFor(state, defenderId).filter(
+    (h) => !cubeEquals(h, carrier.at),
+  );
+  const path = pathCubes(defender.at, carrier.at, blockers);
+  if (!path || path.length < 2 || path.length - 1 > defender.movePoints) {
+    return null;
+  }
+  return {
+    path: path.map(copy),
+    start: copy(path[0]!),
+    approachEnd: copy(path[path.length - 2]!),
+  };
+}
+
+/** The enemy ball carrier `defenderId` could tackle right now, or `null`. */
+export function tackleTarget(
+  state: MoveActionState,
+  defenderId: string,
+): Piece | null {
+  return reachTackle(state, defenderId) ? ballCarrier(state) : null;
+}
+
+/** The outcome of one attribute-vs-attribute dice challenge. */
+export interface ChallengeRoll {
+  attackerRoll: number;
+  defenderRoll: number;
+  /** `attackerRoll + attackerAttr`. */
+  attackerScore: number;
+  /** `defenderRoll + defenderAttr`. */
+  defenderScore: number;
+  /** Higher score wins; `null` on a tie. */
+  winner: "attacker" | "defender" | null;
+  tie: boolean;
+  /** The `Rng` after both rolls (attacker first, then defender). */
+  rng: Rng;
+}
+
+/**
+ * Generic challenge: `d<die> + attackerAttr` vs `d<die> + defenderAttr`. Rolls
+ * the attacker first, then the defender, advancing `rng` by two draws. No
+ * situation-specific rules (fouls, scatter) — the caller layers those on. Reused
+ * by every challenge type in `docs/domain-model.md`; will move to
+ * `src/challenge/` when a second caller lands.
+ */
+export function resolveChallenge(
+  rng: Rng,
+  attackerAttr: number,
+  defenderAttr: number,
+  die = 6,
+): ChallengeRoll {
+  const [attackerRoll, r1] = rollDie(rng, die);
+  const [defenderRoll, r2] = rollDie(r1, die);
+  const attackerScore = attackerRoll + attackerAttr;
+  const defenderScore = defenderRoll + defenderAttr;
+  const tie = attackerScore === defenderScore;
+  return {
+    attackerRoll,
+    defenderRoll,
+    attackerScore,
+    defenderScore,
+    tie,
+    winner: tie ? null : attackerScore > defenderScore ? "attacker" : "defender",
+    rng: r2,
+  };
+}
+
+/** The tackle-specific rule on top of {@link resolveChallenge}: a defender `1`. */
+export function tackleFoul(defenderRoll: number): boolean {
+  return defenderRoll === 1;
+}
+
+/** A resolved tackle, carried until the winner's controller repositions. */
+export interface TackleOutcome {
+  defenderId: string;
+  attackerId: string;
+  /** The carrier hex — where the challenge happened. */
+  at: Cube;
+  /** The defender's hex when the tackle was committed. */
+  start: Cube;
+  /** The defender's resting hex (adjacent to `at`). */
+  approachEnd: Cube;
+  roll: ChallengeRoll;
+  foul: boolean;
+  /** `null` on a foul or a tie. */
+  winner: "attacker" | "defender" | null;
+}
+
+/**
+ * Where the winning carrier may be placed: defender win → the attacker's free
+ * neighbours; attacker win → the defender's free neighbours. Empty on a
+ * foul/tie, or when nothing around is open (only `cancel` then).
+ */
+export function relocationOptions(
+  state: MoveActionState,
+  outcome: TackleOutcome,
+): Cube[] {
+  if (outcome.winner === null) return [];
+  if (outcome.winner === "defender") {
+    const attacker = state.pieces.find((p) => p.id === outcome.attackerId);
+    return attacker ? freeNeighbours(state, attacker.at) : [];
+  }
+  return freeNeighbours(state, outcome.approachEnd);
+}
+
+/**
+ * Settle a tackle: move the winning piece and the ball to `dest`, or — when
+ * `dest` is `null` (cancel) — to the fallback: the defender's `start` for a
+ * defender win, the carrier hex for an attacker win. The defender has already
+ * walked to `approachEnd` and spent its points. Returns a fresh state.
+ */
+export function applyTackle(
+  state: MoveActionState,
+  outcome: TackleOutcome,
+  dest: Cube | null,
+): MoveActionState {
+  if (outcome.winner === null) return state;
+  const winnerId =
+    outcome.winner === "defender" ? outcome.defenderId : outcome.attackerId;
+  const fallback = outcome.winner === "defender" ? outcome.start : outcome.at;
+  const target = copy(dest ?? fallback);
+  return {
+    ...state,
+    ball: copy(target),
+    pieces: state.pieces.map((p) =>
+      p.id === winnerId ? { ...p, at: copy(target) } : p,
+    ),
+  };
+}
+
 // --- event reducer --------------------------------------------------------
 
 /**
  * Where the action is in the flow. `stopped` is a dead end reached only when the
- * ball is stolen mid-move — select another piece or `cancel` to leave it.
+ * ball is stolen mid-move. `foul` and `looseBall` are the tackle's dead ends —
+ * select another piece or `cancel` to leave any of the three.
  */
-export type MovePhase = "idle" | "aiming" | "moving" | "stopped" | "spent";
+export type MovePhase =
+  | "idle"
+  | "aiming"
+  | "moving"
+  | "stopped"
+  | "spent"
+  | "tackling"
+  | "relocating"
+  | "foul"
+  | "looseBall";
 
 export type MoveActionEvent =
   | { type: "selectPiece"; pieceId: string }
   | { type: "hoverHex"; hex: Cube | null }
   | { type: "commit"; hex?: Cube }
   | { type: "advance" }
-  | { type: "cancel" };
+  | { type: "cancel" }
+  /** Lunge the active defender onto the reachable ball carrier. */
+  | { type: "tackle"; hex?: Cube }
+  /** Place the tackle winner on one of {@link MoveActionView.relocation}. */
+  | { type: "relocate"; hex: Cube };
 
 /** The full, serialisable state of one movement action in progress. */
 export interface MoveActionSnapshot {
@@ -257,6 +464,11 @@ export interface MoveActionSnapshot {
   rng: Rng;
   /** Set for one snapshot the moment a steal ends the move (phase `stopped`). */
   steal: StealOutcome | null;
+  /**
+   * The resolved tackle, from the lunge that ends `tackling` until `relocate` /
+   * `cancel` settles it. Also readable in the `foul` / `looseBall` dead ends.
+   */
+  outcome: TackleOutcome | null;
 }
 
 /** One hex segment of a walk, plus who a steal check will roll for. */
@@ -289,16 +501,39 @@ export interface MoveActionView {
    * carrier look wary. Empty unless the active piece carries the ball.
    */
   hazards: Cube[];
-  /** The hex step currently being animated — `moving` only. */
+  /** The hex step currently being animated — `moving` / `tackling` only. */
   step: MoveStep | null;
   /** Set the frame a steal ends the move; `null` otherwise. */
   steal: StealOutcome | null;
+  /**
+   * The reachable tackle for the active defender — a "Tackle" affordance and its
+   * approach preview. `null` unless `aiming` with an enemy carrier in range.
+   */
+  tackle: (TackleReach & { carrierId: string }) | null;
+  /**
+   * The resolved challenge — dice, scores, winner. Set through `relocating` and
+   * the `foul` / `looseBall` dead ends; `null` otherwise.
+   */
+  challenge:
+    | (ChallengeRoll & {
+        attackerId: string;
+        defenderId: string;
+        at: Cube;
+        foul: boolean;
+      })
+    | null;
+  /** Legal spots for the tackle winner — `relocating` only, may be empty. */
+  relocation: Cube[] | null;
+  /** TODO: fouls get their own action. Set in the `foul` dead end. */
+  foul: { attackerId: string; defenderId: string; at: Cube } | null;
+  /** TODO: a tie is a loose ball. Set in the `looseBall` dead end. */
+  looseBall: { attackerId: string; defenderId: string; at: Cube } | null;
 }
 
 /** The interaction fields reset to their `idle` values (fresh `path` array). */
 const idleFields = (): Pick<
   MoveActionSnapshot,
-  "phase" | "activeId" | "target" | "path" | "stepIndex" | "steal"
+  "phase" | "activeId" | "target" | "path" | "stepIndex" | "steal" | "outcome"
 > => ({
   phase: "idle",
   activeId: null,
@@ -306,6 +541,7 @@ const idleFields = (): Pick<
   path: [],
   stepIndex: 0,
   steal: null,
+  outcome: null,
 });
 
 /**
@@ -348,6 +584,74 @@ function resolveSteal(
 }
 
 /**
+ * Resolve the lunge that ends a `tackling` walk: roll the challenge, walk the
+ * defender to `approachEnd` and zero its move points, then branch to `foul`,
+ * `looseBall`, or `relocating` (ball handed to the winner at their hex).
+ */
+function resolveTackle(snap: MoveActionSnapshot): MoveActionSnapshot {
+  const defender = requirePiece(snap.state, snap.activeId!);
+  const carrier = ballCarrier(snap.state)!;
+  const path = snap.path;
+  const approachPath = path.slice(0, path.length - 1);
+  const approachEnd = copy(path[path.length - 2]!);
+
+  const roll = resolveChallenge(
+    snap.rng,
+    attrOf(snap.state, carrier, "dribbling"),
+    attrOf(snap.state, defender, "tackling"),
+    snap.state.stealDie ?? 6,
+  );
+  const foul = tackleFoul(roll.defenderRoll);
+
+  // Defender walks the approach and forfeits the rest, whatever the result.
+  const walked = applyMove(snap.state, defender.id, approachPath);
+  const moved: MoveActionState = {
+    ...walked,
+    pieces: walked.pieces.map((p) =>
+      p.id === defender.id ? { ...p, movePoints: 0 } : p,
+    ),
+  };
+
+  const outcome: TackleOutcome = {
+    defenderId: defender.id,
+    attackerId: carrier.id,
+    at: copy(carrier.at),
+    start: copy(path[0]!),
+    approachEnd,
+    roll,
+    foul,
+    winner: foul ? null : roll.winner,
+  };
+
+  const base = {
+    ...snap,
+    activeId: defender.id,
+    target: null,
+    path: [] as Cube[],
+    stepIndex: 0,
+    rng: roll.rng,
+    steal: null,
+    outcome,
+  };
+
+  // TODO(foul): a foul is resolved by its own action (free kick / card /
+  // advantage). For now: stop in `foul`, ball unchanged, points already spent.
+  if (foul) return { ...base, state: moved, phase: "foul" };
+
+  // TODO(loose-ball): a tie is a loose ball — later, scatter (domain-model
+  // "Loose ball scatter"). For now: stop in `looseBall`, ball unchanged.
+  if (roll.tie) return { ...base, state: moved, phase: "looseBall" };
+
+  // Hand the ball to the winner where they stand; `relocate` / `cancel` moves it.
+  const winnerHex = roll.winner === "defender" ? approachEnd : outcome.at;
+  return {
+    ...base,
+    state: { ...moved, ball: copy(winnerHex) },
+    phase: "relocating",
+  };
+}
+
+/**
  * Apply one {@link MoveActionEvent}. Pure: `snap` is never mutated, and an event
  * that does not apply (wrong phase, unknown piece, unreachable hex) returns
  * `snap` unchanged.
@@ -358,7 +662,13 @@ export function moveAction(
 ): MoveActionSnapshot {
   switch (event.type) {
     case "selectPiece": {
-      if (snap.phase === "moving") return snap;
+      if (
+        snap.phase === "moving" ||
+        snap.phase === "tackling" ||
+        snap.phase === "relocating"
+      ) {
+        return snap;
+      }
       const piece = snap.state.pieces.find((p) => p.id === event.pieceId);
       if (!piece) return snap;
       return {
@@ -370,6 +680,7 @@ export function moveAction(
         stepIndex: 0,
         rng: snap.rng,
         steal: null,
+        outcome: null,
       };
     }
 
@@ -400,7 +711,46 @@ export function moveAction(
       };
     }
 
+    case "tackle": {
+      if (snap.phase !== "aiming" || !snap.activeId) return snap;
+      const reach = reachTackle(snap.state, snap.activeId);
+      const carrier = ballCarrier(snap.state);
+      if (!reach || !carrier) return snap;
+      if (event.hex && !cubeEquals(event.hex, carrier.at)) return snap;
+      return {
+        ...snap,
+        phase: "tackling",
+        target: copy(carrier.at),
+        path: reach.path,
+        stepIndex: 0,
+        steal: null,
+        outcome: null,
+      };
+    }
+
+    case "relocate": {
+      if (snap.phase !== "relocating" || !snap.outcome) return snap;
+      const opts = relocationOptions(snap.state, snap.outcome);
+      if (!opts.some((h) => cubeEquals(h, event.hex))) return snap;
+      return {
+        ...snap,
+        state: applyTackle(snap.state, snap.outcome, copy(event.hex)),
+        phase: "spent",
+        target: null,
+        path: [],
+        outcome: null,
+      };
+    }
+
     case "advance": {
+      if (snap.phase === "tackling" && snap.activeId) {
+        const stepIndex = snap.stepIndex + 1;
+        if (!snap.path[stepIndex]) return snap;
+        if (stepIndex < snap.path.length - 1) {
+          return { ...snap, stepIndex };
+        }
+        return resolveTackle(snap);
+      }
       if (snap.phase !== "moving" || !snap.activeId) return snap;
       const stepIndex = snap.stepIndex + 1;
       const hex = snap.path[stepIndex];
@@ -427,6 +777,7 @@ export function moveAction(
             stepIndex: 0,
             rng,
             steal: { by: check.by, at: copy(hex), rolls: check.rolls },
+            outcome: null,
           };
         }
       }
@@ -445,13 +796,23 @@ export function moveAction(
         stepIndex: 0,
         rng,
         steal: null,
+        outcome: null,
       };
     }
 
     case "cancel":
-      return snap.phase === "moving"
-        ? snap
-        : { state: snap.state, ...idleFields(), rng: snap.rng };
+      if (snap.phase === "moving" || snap.phase === "tackling") return snap;
+      if (snap.phase === "relocating" && snap.outcome) {
+        return {
+          ...snap,
+          state: applyTackle(snap.state, snap.outcome, null),
+          phase: "spent",
+          target: null,
+          path: [],
+          outcome: null,
+        };
+      }
+      return { state: snap.state, ...idleFields(), rng: snap.rng };
 
     default:
       return snap;
@@ -480,22 +841,38 @@ export function moveView(snap: MoveActionSnapshot): MoveActionView {
 
   let step: MoveStep | null = null;
   if (
-    snap.phase === "moving" &&
+    (snap.phase === "moving" || snap.phase === "tackling") &&
     active &&
     snap.stepIndex < snap.path.length - 1
   ) {
     const from = snap.path[snap.stepIndex]!;
     const to = snap.path[snap.stepIndex + 1]!;
+    const lunge =
+      snap.phase === "tackling" && snap.stepIndex + 1 === snap.path.length - 1;
     step = {
       from,
       to,
       index: snap.stepIndex,
       count: snap.path.length - 1,
-      contest: carrying
-        ? enteredInfluence(snap.state, from, to, active.team).map((p) => p.id)
-        : [],
+      contest:
+        lunge && carrier
+          ? [carrier.id]
+          : carrying
+            ? enteredInfluence(snap.state, from, to, active.team).map((p) => p.id)
+            : [],
     };
   }
+
+  let tackle: MoveActionView["tackle"] = null;
+  if (active && snap.phase === "aiming" && carrier) {
+    const reach = reachTackle(snap.state, active.id);
+    if (reach) tackle = { ...reach, carrierId: carrier.id };
+  }
+
+  const o = snap.outcome;
+  const marker = o
+    ? { attackerId: o.attackerId, defenderId: o.defenderId, at: o.at }
+    : null;
 
   return {
     phase: snap.phase,
@@ -510,5 +887,13 @@ export function moveView(snap: MoveActionSnapshot): MoveActionView {
     hazards,
     step,
     steal: snap.steal,
+    tackle,
+    challenge: o ? { ...o.roll, ...marker!, foul: o.foul } : null,
+    relocation:
+      snap.phase === "relocating" && o
+        ? relocationOptions(snap.state, o)
+        : null,
+    foul: snap.phase === "foul" ? marker : null,
+    looseBall: snap.phase === "looseBall" ? marker : null,
   };
 }

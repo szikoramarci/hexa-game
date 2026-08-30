@@ -99,6 +99,10 @@ Known so far:
 The existing `move-action` ball-steal (`d6 <= stealOn`) is a simpler
 placeholder; it will fold into this model.
 
+The tackle challenge is implemented — `resolveChallenge` (generic `d6 + attr`)
+plus the defender lunge, in `move-action`. See `docs/tackle-action.md`. Foul and
+loose ball are `TODO` there.
+
 ### Loose ball scatter
 
 When a challenge draws (or a rule calls for it):

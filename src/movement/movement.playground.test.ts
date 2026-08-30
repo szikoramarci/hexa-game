@@ -5,8 +5,11 @@ import {
   initMoveAction,
   moveAction,
   movePath,
+  moveView,
   pathHazards,
   reachableForPiece,
+  reachTackle,
+  relocationOptions,
   type MoveActionState,
 } from "../move-action/move-action.js";
 import {
@@ -102,6 +105,46 @@ const CASES: MovementCase[] = [
       ],
     },
   },
+  {
+    title: "close down the carrier — a hard tackle",
+    play: {
+      radius: 5,
+      pieces: [
+        { at: cube(3, -3, 0), label: "D", movePoints: 3, team: AWAY, attrs: { tackling: 5 } },
+        { at: origin, label: 9, movePoints: 0, team: HOME, hasBall: true, attrs: { dribbling: 2 } },
+      ],
+    },
+  },
+  {
+    title: "just out of reach — no tackle offered",
+    play: {
+      radius: 5,
+      pieces: [
+        { at: cube(3, -3, 0), label: "D", movePoints: 2, team: AWAY },
+        { at: origin, label: 9, movePoints: 0, team: HOME, hasBall: true },
+      ],
+    },
+  },
+  {
+    title: "the carrier rides the challenge",
+    play: {
+      radius: 5,
+      pieces: [
+        { at: cube(2, -2, 0), label: "D", movePoints: 3, team: AWAY, attrs: { tackling: 1 } },
+        { at: origin, label: 9, movePoints: 0, team: HOME, hasBall: true, attrs: { dribbling: 6 } },
+      ],
+    },
+  },
+  {
+    title: "shoulder to shoulder — even attributes",
+    play: {
+      radius: 4,
+      pieces: [
+        { at: cube(1, -1, 0), label: "D", movePoints: 2, team: AWAY },
+        { at: origin, label: 9, movePoints: 0, team: HOME, hasBall: true },
+      ],
+    },
+  },
 ];
 
 /** The `MoveActionState` for a case (piece ids `case-p0`, `case-p1`, …). */
@@ -112,12 +155,14 @@ function caseState(c: MovementCase): MoveActionState {
     at: p.at,
     movePoints: p.movePoints,
     team: p.team,
+    ...(p.attrs ? { attrs: p.attrs } : {}),
   }));
   const carrier = c.play.pieces.findIndex((p) => p.hasBall);
   const state: MoveActionState = {
     pieces,
     obstacles: [...(c.play.obstacle ?? [])],
     piecesBlock: c.play.piecesBlock,
+    ...(c.play.defaultAttr != null ? { defaultAttr: c.play.defaultAttr } : {}),
   };
   return carrier >= 0 ? { ...state, ball: pieces[carrier]!.at } : state;
 }
@@ -225,5 +270,58 @@ describe("movement playground page", () => {
     expect(a.phase).toBe(b.phase);
     expect(a.steal).toEqual(b.steal);
     expect(["stopped", "aiming", "spent"]).toContain(a.phase);
+  });
+});
+
+/** Case index by title (the tackle cases were appended). */
+const idx = (title: string) => CASES.findIndex((c) => c.title === title);
+
+describe("movement playground page — the tackle", () => {
+  const html = writeMovementPlayground("movement", "piece movement", "x", CASES);
+
+  it("ships the tackle affordances — stay button, target glow, relocation hex", () => {
+    expect(html).toContain('class="stay"');
+    expect(html).toContain(".tackle-target");
+    expect(html).toContain(".hex.relo");
+    expect(html).toContain("resolveChallenge");
+    expect(html).toContain("reachTackle");
+  });
+
+  it("offers the tackle only when the carrier is in budget", () => {
+    const close = caseState(CASES[idx("close down the carrier — a hard tackle")]!);
+    expect(reachTackle(close, "case-p0")).not.toBeNull();
+
+    const far = caseState(CASES[idx("just out of reach — no tackle offered")]!);
+    expect(reachTackle(far, "case-p0")).toBeNull();
+  });
+
+  it("plays each tackle case through to a terminal phase for its baked seed", () => {
+    for (const title of [
+      "close down the carrier — a hard tackle",
+      "the carrier rides the challenge",
+      "shoulder to shoulder — even attributes",
+    ]) {
+      const i = idx(title);
+      const state = caseState(CASES[i]!);
+      const seed = seedRng(`case-${i}`);
+      const play = () => {
+        let s = initMoveAction(state, seed);
+        s = moveAction(s, { type: "selectPiece", pieceId: "case-p0" });
+        s = moveAction(s, { type: "tackle" });
+        let guard = 0;
+        while (s.phase === "tackling" && guard++ < 20) {
+          s = moveAction(s, { type: "advance" });
+        }
+        return s;
+      };
+      const a = play();
+      const b = play();
+      expect(a.outcome).toEqual(b.outcome);
+      expect(["relocating", "foul", "looseBall"]).toContain(a.phase);
+      expect(a.state.pieces.find((p) => p.id === "case-p0")!.movePoints).toBe(0);
+      if (a.phase === "relocating") {
+        expect(moveView(a).relocation).toEqual(relocationOptions(a.state, a.outcome!));
+      }
+    }
   });
 });
