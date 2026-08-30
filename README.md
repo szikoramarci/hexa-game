@@ -146,11 +146,16 @@ aggregating across the parallel vitest workers.
   tackle **spills the ball**: a slate arrow shows the `d6`/`d6` scatter and the
   ball rolls along it until a player pounces or it comes to rest loose. Each
   steal / tackle challenge logs its dice and a plain result under the board
-  (*successful ball-steal*, *failed tackle*, *loose ball … scatter …*). `reset`
-  re-rolls the seed. The inline script mirrors the `move-action` reducer,
-  tackle and scatter included. Authored in
-  `src/movement/movement.playground.test.ts`; see `docs/move-action.md` +
-  `docs/tackle-action.md` + `docs/loose-ball.md`.
+  (*successful ball-steal*, *failed tackle*, *loose ball … scatter …*). Cases
+  are grouped into **Simple movement / Ball steal / Tackling / Loose ball**
+  (jump nav up top); each dice case carries **seed chips** — one click jumps
+  straight to that outcome (a stolen ball, a won tackle, a tie that spills), so
+  the rare events don't need a hundred `shuffle`s. `reset` replays the current
+  seed, `shuffle` rolls a fresh one. The chip seeds are resolved in the test by
+  scanning them through the real `move-action` reducer, which the inline mirror
+  matches. Authored in `src/movement/movement.playground.test.ts`; see
+  `docs/movement-scenarios.md` + `docs/move-action.md` + `docs/tackle-action.md`
+  + `docs/loose-ball.md`.
 - `actions/move-piece/index.html` — click a hex to send the pieces (player disc,
   striped ball) there via `movePiece`; toggle ground / jump. Long moves stay
   snappy (they accelerate); a jump zooms up over the gap. Authored in

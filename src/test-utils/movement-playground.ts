@@ -54,11 +54,49 @@ export interface MovementPlayground {
   defaultAttr?: number;
 }
 
+/** Which section of the page a case sits under. */
+export type MovementGroup = "movement" | "steal" | "tackle" | "loose-ball";
+
+/** Section order + headings. */
+export const GROUP_ORDER: readonly MovementGroup[] = [
+  "movement",
+  "steal",
+  "tackle",
+  "loose-ball",
+];
+export const GROUP_LABEL: Record<MovementGroup, string> = {
+  movement: "Simple movement",
+  steal: "Ball steal",
+  tackle: "Tackling",
+  "loose-ball": "Loose ball",
+};
+
+/** One event a seed chip replays after seeding, so the outcome shows at once. */
+export type ProbeEvent =
+  | { t: "selectPiece"; pi: number }
+  | { t: "commit"; hex: string }
+  | { t: "tackle" };
+
+/** A one-click seed: a plain label and the seed that produces it. */
+export interface SeedChip {
+  label: string;
+  seed: number;
+}
+
 /** One titled case on the movement page. */
 export interface MovementCase {
   /** Short heading above the board. */
   title: string;
+  /** Section it belongs to. */
+  group: MovementGroup;
   play: MovementPlayground;
+  /**
+   * Curated seed chips, one per notable dice outcome. The test resolves these
+   * from {@link probe} before the page is written; omit for cases with no dice.
+   */
+  seeds?: readonly SeedChip[];
+  /** The event script a chip replays after it sets the seed. */
+  probe?: readonly ProbeEvent[];
 }
 
 const f = (n: number): string => n.toFixed(2);
@@ -80,6 +118,8 @@ interface CaseData {
   stealOn: number;
   defaultAttr: number;
   seed: number;
+  seeds: SeedChip[];
+  probe: ProbeEvent[];
   pieces: {
     id: string;
     at: string;
@@ -171,6 +211,9 @@ function renderCase(
       )})">${ballMarker(size, id)}</g>`
     : "";
 
+  const seeds: SeedChip[] = c.seeds ? c.seeds.map((s) => ({ ...s })) : [];
+  const probe: ProbeEvent[] = c.probe ? c.probe.map((e) => ({ ...e })) : [];
+
   const data: CaseData = {
     size,
     board: hexes.map((h) => cubeKey(h)),
@@ -180,7 +223,9 @@ function renderCase(
     stealDie: p.stealDie ?? 6,
     stealOn: p.stealOn ?? 1,
     defaultAttr: p.defaultAttr ?? 3,
-    seed: seedRng(`${id}`),
+    seed: seeds[0]?.seed ?? seedRng(`${id}`),
+    seeds,
+    probe,
     pieces: pieces.map(({ id: pid, at, label, movePoints, team, attrs }) => ({
       id: pid,
       at,
@@ -191,17 +236,35 @@ function renderCase(
     })),
   };
 
+  const chipEls = seeds
+    .map(
+      (s, i) =>
+        `<button class="chip${i === 0 ? " on" : ""}" type="button" ` +
+        `data-seed="${s.seed}">${escapeHtml(s.label)}</button>`,
+    )
+    .join("");
+  const chipRow = seeds.length
+    ? `      <div class="chips">${chipEls}</div>\n`
+    : "";
+
+  // Only cases with a ball roll dice — no point offering a re-roll otherwise.
+  const shuffleBtn = carrier
+    ? `<button class="shuffle" type="button">shuffle</button>`
+    : "";
+
   const section =
     `    <section class="case" id="${id}">\n` +
-    `      <h2>${escapeHtml(c.title)}</h2>\n` +
+    `      <h3>${escapeHtml(c.title)}</h3>\n` +
     `      <svg class="board" viewBox="${vb}" xmlns="http://www.w3.org/2000/svg">\n` +
     polygons +
     `\n        <g class="arrow-layer"></g>\n` +
     pieceEls +
     ballEl +
     `\n      </svg>\n` +
+    chipRow +
     `      <div class="hud"><div class="hud-row"><span class="status"></span>` +
     `<span class="hud-btns"><button class="stay" type="button" hidden>stay</button>` +
+    shuffleBtn +
     `<button class="reset" type="button">reset</button></span></div>` +
     `<p class="log" hidden></p></div>\n` +
     `    </section>`;
@@ -211,10 +274,21 @@ function renderCase(
 
 const CASES_CSS = `
   .lede { max-width: 46rem; }
+  .jump { margin: 0 0 1.5rem; font-size: .85rem; color: #666; }
+  .jump a { text-decoration: none; }
+  .group { margin: 0 0 2rem; }
+  .group > h2 { margin: 0 0 .9rem; padding-bottom: .3rem;
+    border-bottom: 1px solid #e2e2e2; }
   .cases { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: start; }
   .case { border: 1px solid #e2e2e2; border-radius: 8px; padding: .75rem;
     background: #fff; width: 360px; }
-  .case h2 { margin: 0 0 .5rem; font-size: .9rem; }
+  .case h3 { margin: 0 0 .5rem; font-size: .9rem; }
+  .chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: .5rem 0 0; }
+  .chip { font: inherit; font-size: .72rem; padding: .1rem .5rem; cursor: pointer;
+    border: 1px solid #cbd5e1; border-radius: 999px; background: #f1f5f9;
+    color: #475569; }
+  .chip:hover { background: #e2e8f0; }
+  .chip.on { background: #1560c4; border-color: #1560c4; color: #fff; }
   .board { display: block; width: 100%; height: auto; touch-action: none; }
   .hex { fill: ${COLOR.empty}; stroke: ${COLOR.grid}; stroke-width: 1; }
   .hex.obs { fill: ${COLOR.obstacle}; }
@@ -249,7 +323,7 @@ const CASES_CSS = `
   .hud .status.stolen { color: ${COLOR.danger}; font-weight: 700; }
   .hud .status.won { color: #1560c4; font-weight: 700; }
   .hud-btns { display: flex; gap: .4rem; flex: none; }
-  .reset, .stay { font: inherit; padding: .1rem .55rem; cursor: pointer; }
+  .reset, .stay, .shuffle { font: inherit; padding: .1rem .55rem; cursor: pointer; }
   .log { margin: .45rem 0 0; padding: .35rem .5rem; border-radius: 5px;
     background: #f1f1f1; color: #444; font-size: .78rem; line-height: 1.4; }
   .log.win { background: #e6effb; color: #14458c; }
@@ -349,6 +423,8 @@ const SCRIPT = [
   "  });",
   "  var ball = DATA.ball;",
   "  var rng = DATA.seed | 0;",
+  "  // the seed a plain `reset` restores to; a chip / shuffle changes it",
+  "  var curSeed = DATA.seed | 0;",
   "  // the last resolved contest (steal or tackle), shown in the .log line until reset",
   "  var lastChallenge = null;",
   "  // set while the ball animates along a scatter route (loose ball)",
@@ -736,6 +812,27 @@ const SCRIPT = [
   "    })();",
   "  }",
   "",
+  "  // Restore the board to its start and reseed. Shared by reset / shuffle / chips.",
+  "  function restore(seed) {",
+  "    pieces.forEach(function (p) { p.at = p.home; p.movePoints = p.homeMP; });",
+  "    ball = DATA.ball;",
+  "    rng = seed | 0; curSeed = seed | 0;",
+  "    snap = idle(); tree = null; lastChallenge = null; ballRollKey = null;",
+  "  }",
+  "  // Replay a case's probe so a chip lands its outcome without hand-play.",
+  "  function runProbe() {",
+  "    var pr = DATA.probe || [];",
+  "    for (var i = 0; i < pr.length; i++) {",
+  "      var e = pr[i];",
+  "      if (e.t === 'selectPiece') dispatch({ type: 'selectPiece', pieceId: DATA.pieces[e.pi].id });",
+  "      else if (e.t === 'commit') dispatch({ type: 'commit', hex: e.hex });",
+  "      else if (e.t === 'tackle') dispatch({ type: 'tackle' });",
+  "    }",
+  "    render();",
+  "    if (snap.phase === 'moving' || snap.phase === 'tackling') runWalk();",
+  "    else if (snap.phase === 'looseBall' && snap.scatter) rollBall();",
+  "  }",
+  "",
   "  hexEls.forEach(function (el, key) {",
   "    el.addEventListener('pointerenter', function () { dispatch({ type: 'hoverHex', hex: key }); render(); });",
   "    el.addEventListener('pointerleave', function () { dispatch({ type: 'hoverHex', hex: null }); render(); });",
@@ -762,15 +859,27 @@ const SCRIPT = [
   "    });",
   "  });",
   "  stayBtn.addEventListener('click', function () { dispatch({ type: 'cancel' }); render(); });",
+  "  var chipEls = [].slice.call(section.querySelectorAll('.chip'));",
+  "  function clearChips() { chipEls.forEach(function (b) { b.classList.remove('on'); }); }",
+  "  chipEls.forEach(function (btn) {",
+  "    btn.addEventListener('click', function () {",
+  "      if (snap.phase === 'moving' || snap.phase === 'tackling') return;",
+  "      clearChips(); btn.classList.add('on');",
+  "      restore(Number(btn.dataset.seed));",
+  "      render();",
+  "      runProbe();",
+  "    });",
+  "  });",
   "  section.querySelector('.reset').addEventListener('click', function () {",
   "    if (snap.phase === 'moving' || snap.phase === 'tackling') return;",
-  "    pieces.forEach(function (p) { p.at = p.home; p.movePoints = p.homeMP; });",
-  "    ball = DATA.ball;",
-  "    rng = (Math.random() * 0x7fffffff) | 0;",
-  "    snap = idle();",
-  "    tree = null;",
-  "    lastChallenge = null;",
-  "    ballRollKey = null;",
+  "    restore(curSeed);",
+  "    render();",
+  "  });",
+  "  var shuffleBtn = section.querySelector('.shuffle');",
+  "  if (shuffleBtn) shuffleBtn.addEventListener('click', function () {",
+  "    if (snap.phase === 'moving' || snap.phase === 'tackling') return;",
+  "    clearChips();",
+  "    restore((Math.random() * 0x7fffffff) | 0);",
   "    render();",
   "  });",
   "",
@@ -795,6 +904,29 @@ export function writeMovementPlayground(
   const rendered = cases.map((c, i) => renderCase(`case-${i}`, c, size));
   const manifest = rendered.map((r, i) => ({ id: `case-${i}`, data: r.data }));
 
+  const groups = GROUP_ORDER.map((g) => ({
+    g,
+    idxs: cases.flatMap((c, i) => (c.group === g ? [i] : [])),
+  })).filter((grp) => grp.idxs.length > 0);
+
+  const nav =
+    `  <nav class="jump">` +
+    groups
+      .map((grp) => `<a href="#group-${grp.g}">${GROUP_LABEL[grp.g]}</a>`)
+      .join(" &middot; ") +
+    `</nav>\n`;
+
+  const sections = groups
+    .map(
+      (grp) =>
+        `  <section class="group" id="group-${grp.g}">\n` +
+        `    <h2>${GROUP_LABEL[grp.g]}</h2>\n` +
+        `    <div class="cases">\n` +
+        grp.idxs.map((i) => rendered[i]!.section).join("\n") +
+        `\n    </div>\n  </section>`,
+    )
+    .join("\n");
+
   const body =
     `  <a class="back" href="../../index.html">&larr; all scenarios</a>\n` +
     `  <h1>${escapeHtml(label)}</h1>\n` +
@@ -811,11 +943,13 @@ export function writeMovementPlayground(
     `player on the line pounces on it, else it sits loose where it stops. ` +
     `Every challenge logs its dice and a plain result under the board — ` +
     `<em>successful ball-steal</em>, <em>failed tackle</em>, <em>successful tackle</em>. ` +
-    `<strong>reset</strong> re-rolls the seed. Same reducer as <code>move-action</code>.</p>\n` +
-    `  <div class="cases">\n` +
-    rendered.map((r) => r.section).join("\n") +
-    `\n  </div>\n` +
-    `  <script>\nvar CASES = ${JSON.stringify(manifest)};\n` +
+    `Cases are grouped below; dice cases carry <strong>seed chips</strong> — click ` +
+    `one to jump straight to that result (a stolen ball, a won tackle, a tie that ` +
+    `spills). <strong>reset</strong> replays the current seed, <strong>shuffle</strong> ` +
+    `rolls a fresh one. Same reducer as <code>move-action</code>.</p>\n` +
+    nav +
+    sections +
+    `\n  <script>\nvar CASES = ${JSON.stringify(manifest)};\n` +
     SCRIPT +
     `\n  </script>`;
 

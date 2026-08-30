@@ -92,6 +92,12 @@ writeMovementPlayground(
 page; each has a non-empty reachable region; the inline BFS equals
 `reachableCubes` clipped to the board.
 
+## Later
+
+The page grew teams, a ball, the steal check, the tackle and loose-ball
+scatter. It is now split into four sections with per-case **seed chips** —
+see `docs/movement-scenarios.md`.
+
 ## Done when
 
 - `npm run typecheck && npm test` pass.
