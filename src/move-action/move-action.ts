@@ -83,6 +83,15 @@ export interface MoveActionState {
    * or above this books the fouler. Default `4`.
    */
   refereeLeniency?: number;
+  /**
+   * Ground-pass kick reach, in adjacent-hex spacings (feeds `pixelRangeCubes`).
+   * Default `4`. See `docs/pass-action.md`.
+   */
+  passRange?: number;
+  /** Die rolled for a pass interception. Default `6`. */
+  interceptDie?: number;
+  /** An interception roll at or above this picks the pass off. Default `6`. */
+  interceptOn?: number;
 }
 
 /** An {@link ArrowStyle} plus the hexes to draw it through — feeds `hexArrow`. */

@@ -35,6 +35,8 @@ const BLURB: Record<string, string> = {
   movement: "reachableCubes — BFS flood fill within a step budget.",
   pathfind: "pathCubes — shortest obstacle-free hex path via A*.",
   "pixel-range": "pixelRangeCubes — hexes whose centre falls in a pixel circle.",
+  "pass-action":
+    "The ground pass — kick range, the shadow opponents cast, interception rolls.",
 };
 
 interface Meta {

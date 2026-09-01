@@ -147,6 +147,29 @@ See `docs/loose-ball.md`.
 A player moving through a hex that has a loose ball on it picks it up and
 carries it from there.
 
+## Passing
+
+### Ground pass
+
+The carrier kicks the ball along the ground to a hex in range.
+
+- **range** — a rounded kick disc, `pixelRangeCubes(carrier.at, passRange)`.
+- **shadow** — you cannot kick *through* an opponent: a target is illegal when
+  the straight lane (`lineCoverageCubes`) to it covers an enemy hex, so every hex
+  behind a defender drops out. Teammates never block (you may pass past or to
+  them). Obstacle blocking is deferred.
+- **interception** — as the ball rolls the lane, each opponent whose influence
+  (its six neighbours) covers a flight hex rolls one `d6` the first time the ball
+  comes adjacent; `>= interceptOn` (default `6`, a *high* threshold — unlike the
+  `move-action` steal's `<= stealOn`) picks the pass off and the ball stops on
+  that opponent.
+- **landing** — clear to the target: a piece there receives it, otherwise it
+  rests loose (`docs/loose-ball.md` scatter is not used for a completed pass).
+
+Implemented as `pass-action` — direct fns + an event reducer, a sibling to
+`move-action`. Costs no move points (no action-point model yet). The lofted
+`high pass` (a challenge) is still deferred. See `docs/pass-action.md`.
+
 ## Deferred
 
 Relative field tags decision · full challenge catalogue · set-piece rules

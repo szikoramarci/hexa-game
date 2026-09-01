@@ -45,6 +45,7 @@ src/
   arrow/          hexArrow — styled SVG arrow through a list of hex centres
   move-piece/     movePiece — constant-speed hex→hex animation plan (slide / jump)
   move-action/    the movement action — reachable + aim + walk, as pure state
+  pass-action/    the ground pass — kick range, opponent shadow, interception roll
   test-utils/     shared scenario renderer + interactive playgrounds
   index.ts        public exports
 ```
@@ -78,6 +79,22 @@ the first player on the line catches it, otherwise it rests loose where it stops
 carrying piece (`relocationOptions` — free hexes around the other player) or
 `cancel`s to the fallback spot. See `docs/tackle-action.md` + `docs/foul.md` +
 `docs/loose-ball.md`.
+
+`pass-action` is the **ground pass** — a sibling action to `move-action` that
+reuses its `MoveActionState` / `Piece` / `ballCarrier` / `influencers`. Direct
+fns (`passTargets`, `passLane`, `passBlocked`, `canPass`, `passInterceptors`,
+`passThreats`, `passArrow`, `applyPass`) or the event reducer (`initPassAction` /
+`passAction(snap, event)` / `passView`) over
+`idle → aiming → passing → (received | loose | intercepted)` with events
+`selectPiece` (the carrier only) / `hoverHex` / `commit` / `advance` / `cancel`.
+The kick range is `pixelRangeCubes(carrier.at, state.passRange ?? 4)`; a target
+is dropped when the straight `lineCoverageCubes` lane to it covers an
+**opponent** (its **shadow** — teammates and obstacles never block). As the ball
+rolls the lane, each opponent whose influence covers a flight hex rolls one
+`d6` the first time the ball comes adjacent; a roll `>= state.interceptOn ?? 6`
+picks the pass off and the ball stops on that opponent. Clear to the target: a
+piece there receives it, otherwise it rests loose. Seeded, replayable, pure. See
+`docs/pass-action.md`.
 
 `cubeToPixel(c, size?)` / `pixelToCube(px, py, size?)` are the one pointy-top
 layout map (`px = size·√3·(x + z/2)`, `py = size·1.5·z`, default `size` 26) —
@@ -166,6 +183,15 @@ aggregating across the parallel vitest workers.
   matches. Authored in `src/movement/movement.playground.test.ts`; see
   `docs/movement-scenarios.md` + `docs/move-action.md` + `docs/tackle-action.md`
   + `docs/foul.md` + `docs/loose-ball.md`.
+- `actions/passing/index.html` — click the piece on the ball to arm a pass;
+  legal targets fill blue, the hexes an opponent's **shadow** blocks stay grey.
+  Hover a target for the straight two-point arrow (it reddens and its lane hexes
+  pulse when a defender flanks it); click to kick — the ball flies the straight
+  arrow and each flanking opponent rolls one `d6` as it passes (a `6` picks it
+  off), logged under the board. `reset` replays the seed, `shuffle` rolls a fresh
+  one. The page bakes
+  its geometry from the real `pass-action` module; authored in
+  `src/pass-action/pass-action.playground.test.ts`, see `docs/pass-action.md`.
 - `actions/move-piece/index.html` — click a hex to send the pieces (player disc,
   striped ball) there via `movePiece`; toggle ground / jump. Long moves stay
   snappy (they accelerate); a jump zooms up over the gap. Authored in
@@ -198,6 +224,7 @@ Shared test-only code is in `src/test-utils/` (`scenario.ts`, `board.ts`,
 - ~~`tackle`~~ — defender lunge onto the carrier + `d6 + attr` challenge, folded into `move-action` (`resolveChallenge`, `reachTackle`, relocation) *(done)*
 - ~~`loose-ball`~~ — `looseBall` d6-direction / d6-distance scatter of a drawn challenge, wired into the tackle tie; goals + field edges deferred *(done)*
 - ~~`foul`~~ — `resolveFoul` d6 injury (vs resilience) + d6 card (vs referee leniency), wired into the tackle foul branch; the free kick / penalty + advantage are TODO *(done)*
+- ~~`pass-action`~~ — the ground pass: `pixelRangeCubes` kick range, opponent `lineCoverageCubes` shadow, one `d6` interception per flanking opponent; direct fns or event reducer, plus the `actions/passing` playground *(done)*
 - `line` — single-width hexes on a straight line (lerp + cube rounding)
 - `rotate` / `reflect` — symmetry operations
 - ~~`pathfind`~~ — shortest obstacle-free hex path via A* *(done)*

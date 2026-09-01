@@ -75,6 +75,30 @@ export type {
   MovePlan,
 } from "./move-piece/move-piece.js";
 export { moveKeyframes, movePiece } from "./move-piece/move-piece.js";
+export type {
+  InterceptOutcome,
+  PassActionEvent,
+  PassActionSnapshot,
+  PassActionView,
+  PassArrow,
+  PassPhase,
+  PassRoll,
+  PassStep,
+} from "./pass-action/pass-action.js";
+export {
+  applyPass,
+  canPass,
+  initPassAction,
+  passAction,
+  passArrow,
+  passBlocked,
+  passInterceptors,
+  passLane,
+  passRangeCubes,
+  passTargets,
+  passThreats,
+  passView,
+} from "./pass-action/pass-action.js";
 export { reachableCubes } from "./movement/movement.js";
 export { pathCubes } from "./pathfind/pathfind.js";
 export { pixelRangeCubes } from "./pixel-range/pixel-range.js";
