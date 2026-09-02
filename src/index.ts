@@ -99,6 +99,36 @@ export {
   passThreats,
   passView,
 } from "./pass-action/pass-action.js";
+export type {
+  AccuracyRoll,
+  HeaderEntry,
+  HeaderOutcome,
+  HeaderRoll,
+  HighPassArrow,
+  HighPassEvent,
+  HighPassPhase,
+  HighPassSnapshot,
+  HighPassStep,
+  HighPassView,
+  ReactionSlot,
+  ReactionView,
+} from "./high-pass/high-pass.js";
+export {
+  applyHighPass,
+  canHighPass,
+  headerContestants,
+  highPassAction,
+  highPassArrow,
+  highPassBlocked,
+  highPassLandingZone,
+  highPassRangeCubes,
+  highPassReceivers,
+  highPassShadow,
+  highPassTargets,
+  highPassView,
+  initHighPass,
+  reactReach,
+} from "./high-pass/high-pass.js";
 export { reachableCubes } from "./movement/movement.js";
 export { pathCubes } from "./pathfind/pathfind.js";
 export { pixelRangeCubes } from "./pixel-range/pixel-range.js";

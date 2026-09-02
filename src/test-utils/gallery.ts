@@ -37,6 +37,8 @@ const BLURB: Record<string, string> = {
   "pixel-range": "pixelRangeCubes — hexes whose centre falls in a pixel circle.",
   "pass-action":
     "The ground pass — kick range, the shadow opponents cast, interception rolls.",
+  "high-pass":
+    "The lofted pass — long range, adjacent-marker shadow, reactions, the aerial.",
 };
 
 interface Meta {

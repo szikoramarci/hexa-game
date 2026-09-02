@@ -46,6 +46,7 @@ src/
   move-piece/     movePiece — constant-speed hex→hex animation plan (slide / jump)
   move-action/    the movement action — reachable + aim + walk, as pure state
   pass-action/    the ground pass — kick range, opponent shadow, interception roll
+  high-pass/      the lofted pass — long range, adjacent-marker shadow, reactions, aerial
   test-utils/     shared scenario renderer + interactive playgrounds
   index.ts        public exports
 ```
@@ -95,6 +96,27 @@ rolls the lane, each opponent whose influence covers a flight hex rolls one
 picks the pass off and the ball stops on that opponent. Clear to the target: a
 piece there receives it, otherwise it rests loose. Seeded, replayable, pure. See
 `docs/pass-action.md`.
+
+`high-pass` is the **lofted pass** — a sibling action again. Direct fns
+(`highPassRangeCubes`, `highPassLandingZone`, `highPassReceivers`,
+`highPassTargets`, `canHighPass`, `highPassShadow`, `highPassBlocked`,
+`highPassArrow`, `reactReach`, `headerContestants`, `applyHighPass`) or the event
+reducer (`initHighPass` / `highPassAction(snap, event)` / `highPassView`) over
+`idle → receiver → aiming → reacting → rolling → flight → (headed | loose)`. The
+range is `pixelRangeCubes(carrier.at, state.highPassRange ?? 8)` minus the inner
+three rings; **only opponents next to the carrier** cast a `lineCoverageCubes`
+shadow. Aim in two steps — a teammate (only one that still has a hex it can run
+to in the zone; a teammate the shadow shuts out is not offered), then a landing
+hex it can run to in 3 steps (`reachableCubes`, other players blocking the run).
+Locking the hex opens the **reactions**: the receiver moves 3, one opponent moves
+3, and in the `penaltyArea` the keeper moves 1 (or 4 within 5 hexes of the
+landing). Then `d6 + highPass >= state.highPassAccuracyOn ?? 8` lands it on the
+spot; a miss scatters via `looseBall`. Everyone within two hexes of where it
+lands contests `d6 + heading` (`aerial` for a keeper, `-1` two hexes out); the
+highest wins the header, a tie spills it. `Piece` gained `role` +
+`heading` / `aerial` / `highPass`; `MoveActionState` gained `highPassRange` /
+`highPassAccuracyOn` / `penaltyArea`. Seeded, replayable, pure. See
+`docs/high-pass.md`.
 
 `cubeToPixel(c, size?)` / `pixelToCube(px, py, size?)` are the one pointy-top
 layout map (`px = size·√3·(x + z/2)`, `py = size·1.5·z`, default `size` 26) —
@@ -192,6 +214,19 @@ aggregating across the parallel vitest workers.
   one. The page bakes
   its geometry from the real `pass-action` module; authored in
   `src/pass-action/pass-action.playground.test.ts`, see `docs/pass-action.md`.
+- `actions/high-pass/index.html` — click the passer, then a highlighted receiver
+  (*pick a runner* has three; *blocked* shows an opponent shutting one out
+  entirely — even after its run — so it is not offered; *shadow clips the run*
+  shows a marker greying just the near side of a selectable teammate's run): the
+  hexes the receiver can run onto fill blue, the shadowed slice of its run greys
+  out, penalty-area hexes are yellow. Right-click steps the pick back. Hover for the jump arc, click to loft.
+  The receiver then **walks** onto the landing hex (routed round the others); the
+  remaining reactions (one opponent, the keeper in the box) glow with their reach
+  — click a hex to walk there, or **skip**. Then the accuracy `d6`, any
+  `looseBall` scatter and every header
+  roll land in the log. Geometry is baked from the real `high-pass` module;
+  authored in `src/high-pass/high-pass.playground.test.ts`, see
+  `docs/high-pass.md`.
 - `actions/move-piece/index.html` — click a hex to send the pieces (player disc,
   striped ball) there via `movePiece`; toggle ground / jump. Long moves stay
   snappy (they accelerate); a jump zooms up over the gap. Authored in
@@ -225,6 +260,7 @@ Shared test-only code is in `src/test-utils/` (`scenario.ts`, `board.ts`,
 - ~~`loose-ball`~~ — `looseBall` d6-direction / d6-distance scatter of a drawn challenge, wired into the tackle tie; goals + field edges deferred *(done)*
 - ~~`foul`~~ — `resolveFoul` d6 injury (vs resilience) + d6 card (vs referee leniency), wired into the tackle foul branch; the free kick / penalty + advantage are TODO *(done)*
 - ~~`pass-action`~~ — the ground pass: `pixelRangeCubes` kick range, opponent `lineCoverageCubes` shadow, one `d6` interception per flanking opponent; direct fns or event reducer, plus the `actions/passing` playground *(done)*
+- ~~`high-pass`~~ — the lofted pass: long `pixelRangeCubes` disc (inner 3 rings cut), adjacent-only `lineCoverageCubes` shadow, two-step aim (receiver + landing hex), receiver / opponent / keeper reactions, `d6 + highPass` accuracy with a `looseBall` miss, and a many-way `d6 + heading/aerial` header contest; direct fns or event reducer, plus the `actions/high-pass` playground *(done)*
 - `line` — single-width hexes on a straight line (lerp + cube rounding)
 - `rotate` / `reflect` — symmetry operations
 - ~~`pathfind`~~ — shortest obstacle-free hex path via A* *(done)*

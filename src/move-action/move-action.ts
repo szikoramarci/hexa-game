@@ -47,11 +47,27 @@ export interface Piece {
   /** Which side the piece is on. Exactly two teams are in play. */
   team: string;
   /**
+   * Kit role — drives which aerial attribute a header uses (`heading` for
+   * outfield, `aerial` for a keeper) and the goalkeeper reaction in the box.
+   * See `docs/high-pass.md`. Default `"outfield"`.
+   */
+  role?: "outfield" | "goalkeeper";
+  /**
    * Contest attributes, integers `1..6` (see `docs/domain-model.md`). Missing
    * ones fall back to {@link MoveActionState.defaultAttr}. Pace is `movePoints`,
    * not an attr.
    */
-  attrs?: { dribbling?: number; tackling?: number; resilience?: number };
+  attrs?: {
+    dribbling?: number;
+    tackling?: number;
+    resilience?: number;
+    /** Outfield aerial contest — a header. See `docs/high-pass.md`. */
+    heading?: number;
+    /** Goalkeeper aerial contest ("aerial ability"). See `docs/high-pass.md`. */
+    aerial?: number;
+    /** Lofted-pass accuracy — `d6 + highPass >= 8` lands it. See `docs/high-pass.md`. */
+    highPass?: number;
+  };
   /**
    * Carries a foul injury — `-2` move points, and it sticks: a future turn
    * refresh reads this and keeps docking the pace. Set by {@link applyFoul}.
@@ -92,6 +108,22 @@ export interface MoveActionState {
   interceptDie?: number;
   /** An interception roll at or above this picks the pass off. Default `6`. */
   interceptOn?: number;
+  /**
+   * High-pass loft reach, in adjacent-hex spacings (feeds `pixelRangeCubes`).
+   * Default `8`. See `docs/high-pass.md`.
+   */
+  highPassRange?: number;
+  /**
+   * `d6 + highPass` at or above this makes a lofted pass accurate. Default `8`.
+   * See `docs/high-pass.md`.
+   */
+  highPassAccuracyOn?: number;
+  /**
+   * Hexes tagged as penalty area (both boxes) — the keeper only gets a reaction
+   * move when a high pass lands on one. An explicit list until the pitch builder
+   * lands. Default `[]`. See `docs/high-pass.md`.
+   */
+  penaltyArea?: readonly Cube[];
 }
 
 /** An {@link ArrowStyle} plus the hexes to draw it through — feeds `hexArrow`. */

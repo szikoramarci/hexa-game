@@ -16,6 +16,9 @@ Position only. State = the hex it's on. No attributes.
 - **In the air** — after a high pass or a header. The next legal contest is a
   header / aerial, not a ground action. Chain limit: a header cannot be followed
   by another header. Resolved back to carried / loose / dead by the situation.
+  The high pass is implemented (`high-pass`, below); it resolves to `headed` (a
+  contestant won the aerial) or `loose`. The headed pass / headed shot that
+  follows a win is the next session.
 
 ### Players
 
@@ -167,8 +170,42 @@ The carrier kicks the ball along the ground to a hex in range.
   rests loose (`docs/loose-ball.md` scatter is not used for a completed pass).
 
 Implemented as `pass-action` — direct fns + an event reducer, a sibling to
-`move-action`. Costs no move points (no action-point model yet). The lofted
-`high pass` (a challenge) is still deferred. See `docs/pass-action.md`.
+`move-action`. Costs no move points (no action-point model yet). See
+`docs/pass-action.md`.
+
+### High pass
+
+The carrier lofts the ball to a hex a chosen teammate runs onto.
+
+- **range** — a long rounded disc, `pixelRangeCubes(carrier.at, highPassRange ??
+  8)`, minus every hex closer than 4 (a loft clears the carrier hex and the first
+  three rings).
+- **shadow** — only opponents standing *next to the carrier* block: a landing hex
+  is illegal when the straight `lineCoverageCubes` lane to it covers one of them.
+  You cannot loft through a man on top of you; non-adjacent opponents, teammates
+  and obstacles never block.
+- **two-step aim** — pick the receiver (a teammate that can still be reached —
+  one with a hex it can run to in the zone), then a landing hex in the zone *and*
+  one the receiver can **run to** in 3 steps (`reachableCubes`, other players
+  blocking the run). A teammate whose whole run stays inside an opponent's shadow
+  is not selectable.
+- **reactions** — once the landing hex is locked: the receiver moves up to 3, one
+  opponent moves up to 3, and — only when the ball lands in `penaltyArea` — the
+  defending keeper moves 1, or 4 when it is within 5 hexes of the landing hex
+  (its own move, not stacked with the outfield opponent's).
+- **accuracy** — the passer rolls `d6`; `roll + highPass >= highPassAccuracyOn ??
+  8` lands it on the spot. A miss scatters with `looseBall` from the target hex
+  (direction + distance only — nobody catches it mid-air).
+- **header** — everyone within two hexes of where it comes down contests
+  `d6 + heading` (`aerial` for a keeper); two hexes out is `-1`. Highest score
+  wins (`headed`); a tie, or nobody near, spills it (`loose`). The headed pass /
+  shot that follows a win is a later session.
+
+Implemented as `high-pass` — direct fns + an event reducer, a sibling to
+`pass-action`. `Piece` gained `role` + the `heading` / `aerial` / `highPass`
+attrs; `MoveActionState` gained `highPassRange` / `highPassAccuracyOn` /
+`penaltyArea` (an explicit hex list until the pitch builder lands). See
+`docs/high-pass.md`.
 
 ## Deferred
 
